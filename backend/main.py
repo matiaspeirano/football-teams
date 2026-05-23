@@ -1,12 +1,16 @@
 import random
 import copy
+from collections import defaultdict
+from typing import Optional
 
 import pulp
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from players import PLAYERS
+from database import supabase
+import scoring as sc
 
 app = FastAPI()
 
@@ -21,6 +25,21 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+
+class TournamentCreate(BaseModel):
+    name: str
+    year: int
+    season: str
+
+
+class MatchCreate(BaseModel):
+    tournament_id: int
+    played_at: str
+    team1_players: list[str]
+    team2_players: list[str]
+    result: str  # "team1", "team2", or "draw"
+    mvp: Optional[str] = None
+
 
 class PlayerInput(BaseModel):
     name: str
@@ -198,3 +217,105 @@ def generate_teams(request: GenerateTeamsRequest):
     ]
 
     return solutions
+
+
+# ---------------------------------------------------------------------------
+# Tournament endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tournaments")
+def get_tournaments():
+    res = supabase.table("tournaments").select("*").order("year", desc=True).order("season", desc=True).execute()
+    return res.data
+
+
+@app.post("/api/tournaments", status_code=201)
+def create_tournament(body: TournamentCreate):
+    res = supabase.table("tournaments").insert(body.model_dump()).execute()
+    return res.data[0]
+
+
+# ---------------------------------------------------------------------------
+# Match endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/matches")
+def get_matches(tournament_id: int = Query(...)):
+    res = supabase.table("matches").select("*").eq("tournament_id", tournament_id).execute()
+    return res.data
+
+
+@app.post("/api/matches", status_code=201)
+def create_match(body: MatchCreate):
+    res = supabase.table("matches").insert(body.model_dump()).execute()
+    return res.data[0]
+
+
+# ---------------------------------------------------------------------------
+# Standings endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/standings")
+def get_standings(tournament_id: int = Query(...)):
+    res = supabase.table("matches").select("*").eq("tournament_id", tournament_id).execute()
+    matches = res.data
+
+    stats: dict[str, dict] = defaultdict(lambda: {
+        "matches_played": 0, "wins": 0, "draws": 0, "losses": 0,
+        "match_points": 0, "mvp_count": 0,
+    })
+
+    for match in matches:
+        result = match["result"]
+        mvp = match.get("mvp")
+
+        for player in match.get("team1_players", []):
+            s = stats[player]
+            s["matches_played"] += 1
+            if result == "team1":
+                s["wins"] += 1
+                s["match_points"] += sc.POINTS_WIN
+            elif result == "draw":
+                s["draws"] += 1
+                s["match_points"] += sc.POINTS_DRAW
+            else:
+                s["losses"] += 1
+                s["match_points"] += sc.POINTS_LOSS
+            if mvp == player:
+                s["mvp_count"] += 1
+
+        for player in match.get("team2_players", []):
+            s = stats[player]
+            s["matches_played"] += 1
+            if result == "team2":
+                s["wins"] += 1
+                s["match_points"] += sc.POINTS_WIN
+            elif result == "draw":
+                s["draws"] += 1
+                s["match_points"] += sc.POINTS_DRAW
+            else:
+                s["losses"] += 1
+                s["match_points"] += sc.POINTS_LOSS
+            if mvp == player:
+                s["mvp_count"] += 1
+
+    rows = []
+    for player, s in stats.items():
+        presence = s["matches_played"] * sc.PRESENCE_PER_MATCH
+        eff = sc.effectivity(s["match_points"], s["matches_played"])
+        score = sc.total_score(s["match_points"], s["matches_played"], s["mvp_count"], presence)
+        rows.append({
+            "player": player,
+            "matches_played": s["matches_played"],
+            "wins": s["wins"],
+            "draws": s["draws"],
+            "losses": s["losses"],
+            "match_points": s["match_points"],
+            "effectivity": round(eff, 4),
+            "mvp_count": s["mvp_count"],
+            "presence": presence,
+            "total_score": round(score, 4),
+        })
+
+    rows.sort(key=lambda r: r["total_score"], reverse=True)
+    return rows

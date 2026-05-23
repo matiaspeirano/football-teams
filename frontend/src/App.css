@@ -423,3 +423,371 @@ h1 {
   font-weight: 800 !important;
   letter-spacing: 0 !important;
 }
+
+/* ── Navigation bar ─────────────────────────────────────────── */
+.nav-bar {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius);
+  padding: 4px;
+  margin-bottom: 20px;
+}
+
+.nav-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 10px 6px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+
+.nav-tab.active {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+/* ── Password gate ──────────────────────────────────────────── */
+.password-gate {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+.gate-card {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-lg);
+  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: center;
+}
+
+.gate-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.gate-card h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.gate-card p {
+  font-size: 0.87rem;
+  color: var(--text-dim);
+}
+
+.gate-input {
+  width: 100%;
+  background: var(--surface3);
+  border: 1px solid var(--border-mid);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  outline: none;
+  text-align: center;
+}
+
+.gate-input:focus {
+  border-color: var(--green);
+}
+
+/* ── Score form ─────────────────────────────────────────────── */
+.score-form {
+  width: 100%;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.form-field > label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.form-field select,
+.form-field input[type="date"] {
+  background: var(--surface3);
+  border: 1px solid var(--border-mid);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+}
+
+.form-field select:focus,
+.form-field input[type="date"]:focus {
+  border-color: var(--green);
+}
+
+.optional {
+  font-size: 0.72rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+/* ── Player columns (enter score) ───────────────────────────── */
+.player-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.player-col {
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.col-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  padding: 7px 10px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border-mid);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.check-row:last-child {
+  border-bottom: none;
+}
+
+.check-row input[type="checkbox"] {
+  accent-color: var(--green);
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.check-row.checked-t1 {
+  background: rgba(74, 222, 128, 0.1);
+  color: #d1fae5;
+}
+
+.check-row.checked-t2 {
+  background: rgba(96, 165, 250, 0.1);
+  color: #bfdbfe;
+}
+
+.check-row.in-other {
+  opacity: 0.4;
+}
+
+/* ── Result buttons ─────────────────────────────────────────── */
+.result-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.result-btn {
+  flex: 1;
+  background: var(--surface3);
+  border: 1.5px solid var(--border-mid);
+  color: var(--text-dim);
+  padding: 10px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.result-btn.active {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: #d1fae5;
+}
+
+/* ── Success message ────────────────────────────────────────── */
+.success-msg {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  color: var(--green);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.success-msg button {
+  background: none;
+  border: none;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.7;
+}
+
+/* ── Standings tab ──────────────────────────────────────────── */
+.standings-tab {
+  width: 100%;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-mid);
+}
+
+.standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.standings-table th {
+  background: var(--surface2);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 10px 8px;
+  text-align: center;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-mid);
+}
+
+.standings-table .th-left {
+  text-align: left;
+}
+
+.standings-table td {
+  padding: 9px 8px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.standings-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.rank-cell {
+  font-size: 1rem;
+  width: 32px;
+}
+
+.name-cell {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.score-cell {
+  font-weight: 800;
+  color: var(--green);
+}
+
+/* ── Top-3 highlights ───────────────────────────────────────── */
+.rank-gold {
+  background: rgba(251, 191, 36, 0.07);
+}
+
+.rank-gold .name-cell {
+  color: #fbbf24;
+}
+
+.rank-silver {
+  background: rgba(148, 163, 184, 0.07);
+}
+
+.rank-silver .name-cell {
+  color: #94a3b8;
+}
+
+.rank-bronze {
+  background: rgba(180, 113, 60, 0.07);
+}
+
+.rank-bronze .name-cell {
+  color: #cd7f32;
+}
+
+/* ── Status / empty messages ────────────────────────────────── */
+.status-msg {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 32px 0;
+  font-size: 0.88rem;
+}
+
+/* ── Standings summary line ─────────────────────────────────── */
+.standings-summary {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+/* ── Constraint inline error ────────────────────────────────── */
+.constraint-error {
+  font-size: 0.78rem;
+  color: var(--red);
+  margin-top: 6px;
+}
+
+/* ── Disabled player button (limit reached) ─────────────────── */
+.player-btn.limit-reached {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+/* ── Disabled checkbox row ──────────────────────────────────── */
+.check-row.check-disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
