@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 
+const API_BASE = import.meta.env.PROD
+  ? 'https://football-teams-backend.onrender.com'
+  : ''
+
 export default function App() {
   const [players, setPlayers] = useState([])
   const [selected, setSelected] = useState(new Set())
@@ -17,7 +21,7 @@ export default function App() {
   const [fetchError, setFetchError] = useState(null)
 
   useEffect(() => {
-    fetch('/api/players')
+    fetch(`${API_BASE}/api/players`)
       .then(r => r.json())
       .then(data => setPlayers(data))
       .catch(() => setFetchError('Could not load players. Is the backend running?'))
@@ -55,7 +59,7 @@ export default function App() {
     setSolutions(null)
     try {
       const selectedPlayers = players.filter(p => selected.has(p.name))
-      const res = await fetch('/api/generate-teams', {
+      const res = await fetch(`${API_BASE}/api/generate-teams`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
