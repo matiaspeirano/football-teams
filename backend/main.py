@@ -1,15 +1,17 @@
 import random
-import copy
+import secrets
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pulp
-from fastapi import FastAPI, HTTPException, Query
+from dateutil.parser import parse as parse_date
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from players import PLAYERS
 from database import supabase
+from auth import get_required_user
 import scoring as sc
 
 app = FastAPI()
@@ -32,233 +34,284 @@ class TournamentCreate(BaseModel):
     season: str
 
 
+class RatingItem(BaseModel):
+    rated_id: str
+    play: int
+    run: int
+    goals: int
+
+
 class MatchCreate(BaseModel):
-    tournament_id: int
     played_at: str
     team1_players: list[str]
     team2_players: list[str]
-    result: str  # "team1", "team2", or "draw"
+    result: str
     mvp: Optional[str] = None
 
 
-class PlayerInput(BaseModel):
-    name: str
-    play: str
-    run: str
-    goals: str
-
-
 class GenerateTeamsRequest(BaseModel):
-    players: list[PlayerInput]
     num_players_per_team: int
+    selected_player_ids: list[str]
     must_together: list[list[str]] = []
     must_separate: list[list[str]] = []
 
 
+class InviteCreate(BaseModel):
+    role: str
+
+
+class InviteAccept(BaseModel):
+    token: str
+
+
+class ProfileUpdate(BaseModel):
+    display_name: str
+
+
 # ---------------------------------------------------------------------------
-# Algorithm
+# Shared helpers
 # ---------------------------------------------------------------------------
 
-def get_score(value: str) -> int:
-    return {"Low": 1, "Medium Low": 2, "Medium": 3, "Medium High": 4, "High": 5}.get(value, 0)
+def _averaged_ratings(tournament_id: int) -> dict[str, dict]:
+    """Returns avg play/run/goals per rated_id for a given tournament."""
+    res = supabase.table("player_ratings").select("rated_id,play,run,goals").eq("tournament_id", tournament_id).execute()
+    buckets: dict[str, list] = defaultdict(list)
+    for r in res.data:
+        buckets[r["rated_id"]].append(r)
+    out = {}
+    for uid, ratings in buckets.items():
+        n = len(ratings)
+        out[uid] = {
+            "avg_play":  sum(r["play"]  for r in ratings) / n,
+            "avg_run":   sum(r["run"]   for r in ratings) / n,
+            "avg_goals": sum(r["goals"] for r in ratings) / n,
+            "ratings_count": n,
+        }
+    return out
 
 
-def compute_base_score(player: dict) -> int:
-    return get_score(player["play"]) + get_score(player["run"]) + get_score(player["goals"])
+def _display_names(user_ids: list[str]) -> dict[str, Optional[str]]:
+    if not user_ids:
+        return {}
+    res = supabase.table("profiles").select("id,display_name").in_("id", user_ids).execute()
+    return {p["id"]: p.get("display_name") for p in res.data}
 
 
-def optimize_teams_lp(players, randomization_level, num_players_per_team, must_together, must_separate):
-    active_players = [p for p in players if p["playing"] == 1]
+def _require_admin(tournament_id: int, user_id: str) -> None:
+    res = supabase.table("tournament_players").select("role").eq("tournament_id", tournament_id).eq("user_id", user_id).execute()
+    if not res.data or res.data[0]["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
 
-    if len(active_players) != num_players_per_team * 2:
-        raise ValueError(
-            "Need exactly {} players playing, got {}".format(
-                num_players_per_team * 2, len(active_players)
-            )
-        )
 
-    n = len(active_players)
-    scores = {}
-    name_to_index = {}
+# ---------------------------------------------------------------------------
+# LP team generation
+# ---------------------------------------------------------------------------
 
-    for i, p in enumerate(active_players):
-        base = compute_base_score(p)
-        noise = random.uniform(-randomization_level, randomization_level)
-        scores[i] = max(1, base + noise)
-        name_to_index[p["name"]] = i
+def _optimize_once(players: list[dict], randomization_level: float, num_per_team: int,
+                   must_together: list[list[str]], must_separate: list[list[str]]) -> dict:
+    n = len(players)
+    id_to_idx = {p["id"]: i for i, p in enumerate(players)}
+
+    noisy_scores = {
+        i: max(0.1, p["score"] + random.uniform(-randomization_level, randomization_level))
+        for i, p in enumerate(players)
+    }
 
     model = pulp.LpProblem("TeamBalancing", pulp.LpMinimize)
     x = pulp.LpVariable.dicts("x", range(n), cat="Binary")
     d = pulp.LpVariable("difference", lowBound=0)
 
-    team1_score = pulp.lpSum(scores[i] * x[i] for i in range(n))
-    team2_score = pulp.lpSum(scores[i] * (1 - x[i]) for i in range(n))
+    t1 = pulp.lpSum(noisy_scores[i] * x[i] for i in range(n))
+    t2 = pulp.lpSum(noisy_scores[i] * (1 - x[i]) for i in range(n))
 
     model += d
-    model += team1_score - team2_score <= d
-    model += team2_score - team1_score <= d
-    model += pulp.lpSum(x[i] for i in range(n)) == num_players_per_team
+    model += t1 - t2 <= d
+    model += t2 - t1 <= d
+    model += pulp.lpSum(x[i] for i in range(n)) == num_per_team
 
-    for p1, p2 in must_together:
-        if p1 not in name_to_index or p2 not in name_to_index:
-            raise ValueError(f"Unknown player in must_together: {p1}, {p2}")
-        model += x[name_to_index[p1]] == x[name_to_index[p2]]
+    for p1_id, p2_id in must_together:
+        if p1_id not in id_to_idx or p2_id not in id_to_idx:
+            raise ValueError(f"Unknown player in must_together: {p1_id}, {p2_id}")
+        model += x[id_to_idx[p1_id]] == x[id_to_idx[p2_id]]
 
-    for p1, p2 in must_separate:
-        if p1 not in name_to_index or p2 not in name_to_index:
-            raise ValueError(f"Unknown player in must_separate: {p1}, {p2}")
-        model += x[name_to_index[p1]] + x[name_to_index[p2]] == 1
+    for p1_id, p2_id in must_separate:
+        if p1_id not in id_to_idx or p2_id not in id_to_idx:
+            raise ValueError(f"Unknown player in must_separate: {p1_id}, {p2_id}")
+        model += x[id_to_idx[p1_id]] + x[id_to_idx[p2_id]] == 1
 
     model.solve(pulp.PULP_CBC_CMD(msg=0))
 
-    team1, team2 = [], []
-    for i in range(n):
-        if pulp.value(x[i]) == 1:
-            team1.append(active_players[i]["name"])
-        else:
-            team2.append(active_players[i]["name"])
-
-    team1_score_real = sum(
-        compute_base_score(active_players[i]) for i in range(n) if pulp.value(x[i]) == 1
-    )
-    team2_score_real = sum(
-        compute_base_score(active_players[i]) for i in range(n) if pulp.value(x[i]) == 0
-    )
+    team1 = [players[i] for i in range(n) if pulp.value(x[i]) == 1]
+    team2 = [players[i] for i in range(n) if pulp.value(x[i]) == 0]
+    s1 = sum(p["score"] for p in team1)
+    s2 = sum(p["score"] for p in team2)
 
     return {
         "team1": team1,
         "team2": team2,
-        "score_team1": team1_score_real,
-        "score_team2": team2_score_real,
-        "difference": abs(team1_score_real - team2_score_real),
+        "score_team1": round(s1, 2),
+        "score_team2": round(s2, 2),
+        "difference": round(abs(s1 - s2), 2),
     }
 
 
-def generate_multiple_solutions(players, n_solutions, randomization_level, num_players_per_team, must_together, must_separate):
-    results = []
+def _generate_solutions(players: list[dict], n_solutions: int, randomization_level: float,
+                         num_per_team: int, must_together: list[list[str]], must_separate: list[list[str]]) -> list[dict]:
+    candidates = []
     for _ in range(n_solutions * 5):
-        res = optimize_teams_lp(players, randomization_level, num_players_per_team, must_together, must_separate)
-        results.append(res)
+        candidates.append(_optimize_once(players, randomization_level, num_per_team, must_together, must_separate))
 
-    results = sorted(results, key=lambda x: x["difference"])
+    candidates.sort(key=lambda r: r["difference"])
+    seen: set = set()
     unique = []
-    seen = set()
-    for r in results:
-        key = tuple(sorted(r["team1"]))
+    for r in candidates:
+        key = tuple(sorted(p["id"] for p in r["team1"]))
         if key not in seen:
             seen.add(key)
             unique.append(r)
-
     return unique[:n_solutions]
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# AUTH & PROFILE
 # ---------------------------------------------------------------------------
 
-@app.get("/api/players")
-def get_players():
-    return PLAYERS
+@app.get("/api/me")
+def get_me(user_id: str = Depends(get_required_user)):
+    res = supabase.table("profiles").select("*").eq("id", user_id).execute()
+    if not res.data:
+        return {"id": user_id, "display_name": None, "linked_player_name": None}
+    p = res.data[0]
+    return {"id": user_id, "display_name": p.get("display_name"), "linked_player_name": p.get("linked_player_name")}
 
 
-@app.post("/api/generate-teams")
-def generate_teams(request: GenerateTeamsRequest):
-    selected_names = {p.name for p in request.players}
-
-    # Build the ratings lookup from the canonical player list
-    ratings = {p["name"]: p for p in PLAYERS}
-
-    unknown = selected_names - ratings.keys()
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"Unknown players: {unknown}")
-
-    # Compose the player list with playing flags set by the request
-    players_for_solver = []
-    for p in PLAYERS:
-        entry = copy.copy(p)
-        entry["playing"] = 1 if p["name"] in selected_names else 0
-        players_for_solver.append(entry)
-
-    expected = request.num_players_per_team * 2
-    if len(selected_names) != expected:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Expected {expected} selected players, got {len(selected_names)}",
-        )
-
-    try:
-        raw_solutions = generate_multiple_solutions(
-            players=players_for_solver,
-            n_solutions=3,
-            randomization_level=0.5,
-            num_players_per_team=request.num_players_per_team,
-            must_together=request.must_together,
-            must_separate=request.must_separate,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Enrich each solution with per-player scores
-    def enrich(names):
-        return [
-            {"name": name, "score": compute_base_score(ratings[name])}
-            for name in names
-        ]
-
-    solutions = [
-        {
-            "team1": enrich(sol["team1"]),
-            "team2": enrich(sol["team2"]),
-            "score_team1": sol["score_team1"],
-            "score_team2": sol["score_team2"],
-            "difference": sol["difference"],
-        }
-        for sol in raw_solutions
-    ]
-
-    return solutions
+@app.put("/api/profile")
+def update_profile(body: ProfileUpdate, user_id: str = Depends(get_required_user)):
+    supabase.table("profiles").upsert({"id": user_id, "display_name": body.display_name}).execute()
+    return {"success": True}
 
 
 # ---------------------------------------------------------------------------
-# Tournament endpoints
+# TOURNAMENTS
 # ---------------------------------------------------------------------------
 
 @app.get("/api/tournaments")
-def get_tournaments():
+def get_tournaments(user_id: str = Depends(get_required_user)):
     res = supabase.table("tournaments").select("*").order("year", desc=True).order("season", desc=True).execute()
     return res.data
 
 
 @app.post("/api/tournaments", status_code=201)
-def create_tournament(body: TournamentCreate):
-    res = supabase.table("tournaments").insert(body.model_dump()).execute()
-    return res.data[0]
+def create_tournament(body: TournamentCreate, user_id: str = Depends(get_required_user)):
+    res = supabase.table("tournaments").insert({"name": body.name, "year": body.year, "season": body.season}).execute()
+    tournament = res.data[0]
+    supabase.table("tournament_players").insert({
+        "tournament_id": tournament["id"],
+        "user_id": user_id,
+        "role": "admin",
+    }).execute()
+    return tournament
 
 
 # ---------------------------------------------------------------------------
-# Match endpoints
+# TOURNAMENT PLAYERS
 # ---------------------------------------------------------------------------
 
-@app.get("/api/matches")
-def get_matches(tournament_id: int = Query(...)):
+@app.get("/api/tournaments/{tournament_id}/players")
+def get_tournament_players(tournament_id: int, user_id: str = Depends(get_required_user)):
+    members_res = supabase.table("tournament_players").select("user_id,role").eq("tournament_id", tournament_id).execute()
+    if not members_res.data:
+        return []
+
+    member_ids = [m["user_id"] for m in members_res.data]
+    names = _display_names(member_ids)
+    ratings_map = _averaged_ratings(tournament_id)
+
+    result = []
+    for m in members_res.data:
+        uid = m["user_id"]
+        r = ratings_map.get(uid, {})
+        result.append({
+            "user_id": uid,
+            "display_name": names.get(uid),
+            "role": m["role"],
+            "avg_play":  round(r.get("avg_play",  3.0), 2),
+            "avg_run":   round(r.get("avg_run",   3.0), 2),
+            "avg_goals": round(r.get("avg_goals", 3.0), 2),
+            "ratings_count": r.get("ratings_count", 0),
+        })
+    return result
+
+
+@app.get("/api/tournaments/{tournament_id}/my-role")
+def get_my_role(tournament_id: int, user_id: str = Depends(get_required_user)):
+    res = supabase.table("tournament_players").select("role").eq("tournament_id", tournament_id).eq("user_id", user_id).execute()
+    role = res.data[0]["role"] if res.data else None
+    return {"role": role}
+
+
+# ---------------------------------------------------------------------------
+# RATINGS
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tournaments/{tournament_id}/ratings")
+def get_my_ratings(tournament_id: int, user_id: str = Depends(get_required_user)):
+    res = supabase.table("player_ratings").select("rated_id,play,run,goals").eq("tournament_id", tournament_id).eq("rater_id", user_id).execute()
+    return res.data
+
+
+@app.post("/api/tournaments/{tournament_id}/ratings", status_code=201)
+def upsert_ratings(tournament_id: int, body: list[RatingItem], user_id: str = Depends(get_required_user)):
+    if not body:
+        return {"saved": 0}
+    rows = [
+        {
+            "tournament_id": tournament_id,
+            "rater_id": user_id,
+            "rated_id": item.rated_id,
+            "play": item.play,
+            "run": item.run,
+            "goals": item.goals,
+        }
+        for item in body
+    ]
+    supabase.table("player_ratings").upsert(rows, on_conflict="tournament_id,rater_id,rated_id").execute()
+    return {"saved": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# MATCHES
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tournaments/{tournament_id}/matches")
+def get_matches(tournament_id: int, user_id: str = Depends(get_required_user)):
     res = supabase.table("matches").select("*").eq("tournament_id", tournament_id).execute()
     return res.data
 
 
-@app.post("/api/matches", status_code=201)
-def create_match(body: MatchCreate):
-    res = supabase.table("matches").insert(body.model_dump()).execute()
+@app.post("/api/tournaments/{tournament_id}/matches", status_code=201)
+def create_match(tournament_id: int, body: MatchCreate, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    res = supabase.table("matches").insert({
+        "tournament_id": tournament_id,
+        "played_at": body.played_at,
+        "team1_players": body.team1_players,
+        "team2_players": body.team2_players,
+        "result": body.result,
+        "mvp": body.mvp,
+    }).execute()
     return res.data[0]
 
 
 # ---------------------------------------------------------------------------
-# Standings endpoint
+# STANDINGS
 # ---------------------------------------------------------------------------
 
-@app.get("/api/standings")
-def get_standings(tournament_id: int = Query(...)):
-    res = supabase.table("matches").select("*").eq("tournament_id", tournament_id).execute()
-    matches = res.data
+@app.get("/api/tournaments/{tournament_id}/standings")
+def get_standings(tournament_id: int, user_id: str = Depends(get_required_user)):
+    matches_res = supabase.table("matches").select("*").eq("tournament_id", tournament_id).execute()
+    matches = matches_res.data
+    total_matches = len(matches)
 
     stats: dict[str, dict] = defaultdict(lambda: {
         "matches_played": 0, "wins": 0, "draws": 0, "losses": 0,
@@ -269,43 +322,42 @@ def get_standings(tournament_id: int = Query(...)):
         result = match["result"]
         mvp = match.get("mvp")
 
-        for player in match.get("team1_players", []):
-            s = stats[player]
+        for pid in match.get("team1_players", []):
+            s = stats[pid]
             s["matches_played"] += 1
             if result == "team1":
-                s["wins"] += 1
-                s["match_points"] += sc.POINTS_WIN
+                s["wins"] += 1; s["match_points"] += sc.POINTS_WIN
             elif result == "draw":
-                s["draws"] += 1
-                s["match_points"] += sc.POINTS_DRAW
+                s["draws"] += 1; s["match_points"] += sc.POINTS_DRAW
             else:
-                s["losses"] += 1
-                s["match_points"] += sc.POINTS_LOSS
-            if mvp == player:
+                s["losses"] += 1; s["match_points"] += sc.POINTS_LOSS
+            if mvp == pid:
                 s["mvp_count"] += 1
 
-        for player in match.get("team2_players", []):
-            s = stats[player]
+        for pid in match.get("team2_players", []):
+            s = stats[pid]
             s["matches_played"] += 1
             if result == "team2":
-                s["wins"] += 1
-                s["match_points"] += sc.POINTS_WIN
+                s["wins"] += 1; s["match_points"] += sc.POINTS_WIN
             elif result == "draw":
-                s["draws"] += 1
-                s["match_points"] += sc.POINTS_DRAW
+                s["draws"] += 1; s["match_points"] += sc.POINTS_DRAW
             else:
-                s["losses"] += 1
-                s["match_points"] += sc.POINTS_LOSS
-            if mvp == player:
+                s["losses"] += 1; s["match_points"] += sc.POINTS_LOSS
+            if mvp == pid:
                 s["mvp_count"] += 1
 
+    all_pids = list(stats.keys())
+    names = _display_names(all_pids)
+
     rows = []
-    for player, s in stats.items():
+    for pid, s in stats.items():
         presence = s["matches_played"] * sc.PRESENCE_PER_MATCH
         eff = sc.effectivity(s["match_points"], s["matches_played"])
         score = sc.total_score(s["match_points"], s["matches_played"], s["mvp_count"], presence)
+        presence_pct = round(s["matches_played"] / total_matches * 100, 1) if total_matches > 0 else 0.0
         rows.append({
-            "player": player,
+            "user_id": pid,
+            "display_name": names.get(pid),
             "matches_played": s["matches_played"],
             "wins": s["wins"],
             "draws": s["draws"],
@@ -313,9 +365,102 @@ def get_standings(tournament_id: int = Query(...)):
             "match_points": s["match_points"],
             "effectivity": round(eff, 4),
             "mvp_count": s["mvp_count"],
-            "presence": presence,
+            "presence_pct": presence_pct,
             "total_score": round(score, 4),
         })
 
     rows.sort(key=lambda r: r["total_score"], reverse=True)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# TEAM GENERATION
+# ---------------------------------------------------------------------------
+
+@app.post("/api/tournaments/{tournament_id}/generate-teams")
+def generate_teams(tournament_id: int, body: GenerateTeamsRequest, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+
+    expected = body.num_players_per_team * 2
+    if len(body.selected_player_ids) != expected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected {expected} selected players, got {len(body.selected_player_ids)}",
+        )
+
+    ratings_map = _averaged_ratings(tournament_id)
+    names = _display_names(body.selected_player_ids)
+
+    players = []
+    for uid in body.selected_player_ids:
+        r = ratings_map.get(uid, {})
+        avg_play  = r.get("avg_play",  3.0)
+        avg_run   = r.get("avg_run",   3.0)
+        avg_goals = r.get("avg_goals", 3.0)
+        players.append({
+            "id": uid,
+            "display_name": names.get(uid, uid),
+            "score": avg_play + avg_run + avg_goals,
+            "avg_play":  round(avg_play,  2),
+            "avg_run":   round(avg_run,   2),
+            "avg_goals": round(avg_goals, 2),
+        })
+
+    try:
+        solutions = _generate_solutions(
+            players=players,
+            n_solutions=3,
+            randomization_level=0.5,
+            num_per_team=body.num_players_per_team,
+            must_together=body.must_together,
+            must_separate=body.must_separate,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return solutions
+
+
+# ---------------------------------------------------------------------------
+# INVITES
+# ---------------------------------------------------------------------------
+
+@app.post("/api/tournaments/{tournament_id}/invite", status_code=201)
+def create_invite(tournament_id: int, body: InviteCreate, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    supabase.table("invite_links").insert({
+        "tournament_id": tournament_id,
+        "role": body.role,
+        "created_by": user_id,
+        "token": token,
+        "expires_at": expires_at,
+        "used": False,
+    }).execute()
+    return {"invite_url": f"/invite/{token}"}
+
+
+@app.post("/api/invite/accept")
+def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user)):
+    res = supabase.table("invite_links").select("*").eq("token", body.token).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Invalid invite token")
+
+    invite = res.data[0]
+    if invite.get("used"):
+        raise HTTPException(status_code=400, detail="Invite already used")
+
+    if parse_date(invite["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Invite expired")
+
+    existing = supabase.table("tournament_players").select("user_id").eq("tournament_id", invite["tournament_id"]).eq("user_id", user_id).execute()
+    if not existing.data:
+        supabase.table("tournament_players").insert({
+            "tournament_id": invite["tournament_id"],
+            "user_id": user_id,
+            "role": invite["role"],
+        }).execute()
+
+    supabase.table("invite_links").update({"used": True}).eq("token", body.token).execute()
+    return {"tournament_id": invite["tournament_id"]}

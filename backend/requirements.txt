@@ -3,3 +3,4 @@ uvicorn[standard]
 pulp
 numpy
 supabase
+python-dateutil
