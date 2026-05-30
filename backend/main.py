@@ -47,6 +47,7 @@ class MatchCreate(BaseModel):
     team2_players: list[str]
     result: str
     mvp: Optional[str] = None
+    scheduled_match_id: Optional[int] = None
 
 
 class GenerateTeamsRequest(BaseModel):
@@ -379,7 +380,13 @@ def create_match(tournament_id: int, body: MatchCreate, user_id: str = Depends(g
         "result": body.result,
         "mvp": body.mvp,
     }).execute()
-    return res.data[0]
+    match = res.data[0]
+    if body.scheduled_match_id:
+        supabase.table("scheduled_matches").update({
+            "result_match_id": match["id"],
+            "status": "played",
+        }).eq("id", body.scheduled_match_id).execute()
+    return match
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +560,16 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
         for uid in (m.get("team2_players") or []):
             all_uids.add(uid)
 
+    # Fetch linked match results for scheduled matches that have one
+    result_match_ids = [m["result_match_id"] for m in matches if m.get("result_match_id")]
+    results_by_id: dict[int, dict] = {}
+    if result_match_ids:
+        res_matches = supabase.table("matches").select("id,result,mvp").in_("id", result_match_ids).execute()
+        for rm in res_matches.data:
+            results_by_id[rm["id"]] = rm
+            if rm.get("mvp"):
+                all_uids.add(rm["mvp"])
+
     names = _display_names(list(all_uids))
 
     result = []
@@ -564,6 +581,8 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
         ]
         t1 = m.get("team1_players") or []
         t2 = m.get("team2_players") or []
+        rm_id = m.get("result_match_id")
+        rm = results_by_id.get(rm_id) if rm_id else None
         result.append({
             "id": m["id"],
             "scheduled_at": m["scheduled_at"],
@@ -575,6 +594,9 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
             "rsvp_count": sum(1 for r in rsvps if r["status"] == "in"),
             "team1": [{"user_id": uid, "display_name": names.get(uid)} for uid in t1],
             "team2": [{"user_id": uid, "display_name": names.get(uid)} for uid in t2],
+            "result_match_id": rm_id,
+            "result": rm["result"] if rm else None,
+            "mvp_display_name": names.get(rm["mvp"]) if rm and rm.get("mvp") else None,
         })
     return result
 

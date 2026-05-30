@@ -171,13 +171,14 @@ function EditTeamsPanel({ match, tournamentId, apiFetch, onSaved, onCancel }) {
 
 // ─── Match Card ────────────────────────────────────────────────────────────────
 
-function MatchCard({ match, myRole, userId, rsvping, onRsvp, onUpdateStatus, onDelete, onGenerateTeams, tournamentId, apiFetch, onTeamsSaved }) {
+function MatchCard({ match, myRole, userId, rsvping, onRsvp, onUpdateStatus, onDelete, onGenerateTeams, onEnterResult, tournamentId, apiFetch, onTeamsSaved }) {
   const [editingTeams, setEditingTeams] = useState(false)
 
   const myRsvp = match.rsvps.find(r => r.user_id === userId)
   const inPlayers = match.rsvps.filter(r => r.status === 'in')
   const isOpen = match.status === 'open' || match.status === 'confirmed'
   const hasTeams = match.team1?.length > 0 || match.team2?.length > 0
+  const hasResult = !!match.result_match_id
 
   const statusColor = {
     open: 'var(--text-dim)',
@@ -242,6 +243,17 @@ function MatchCard({ match, myRole, userId, rsvping, onRsvp, onUpdateStatus, onD
             </div>
           )}
 
+          {hasResult && (
+            <div className="match-result-summary">
+              <span className="result-outcome">
+                {match.result === 'team1' ? 'Team 1 Won' : match.result === 'team2' ? 'Team 2 Won' : 'Draw'}
+              </span>
+              {match.mvp_display_name && (
+                <span className="match-mvp">MVP: {match.mvp_display_name}</span>
+              )}
+            </div>
+          )}
+
           <div className="match-actions">
             {isOpen && (
               <div className="match-rsvp-row">
@@ -273,13 +285,22 @@ function MatchCard({ match, myRole, userId, rsvping, onRsvp, onUpdateStatus, onD
                     {hasTeams ? 'Regenerate Teams' : 'Generate Teams'}
                   </button>
                 )}
-                {hasTeams && (
+                {hasTeams && !hasResult && (
                   <button
                     className="add-btn"
                     onClick={() => setEditingTeams(true)}
                     style={{ flex: 1 }}
                   >
                     Edit Teams
+                  </button>
+                )}
+                {hasTeams && !hasResult && (
+                  <button
+                    className="add-btn"
+                    onClick={() => onEnterResult(match)}
+                    style={{ flex: 1 }}
+                  >
+                    Enter Result
                   </button>
                 )}
                 {isOpen && (
@@ -308,7 +329,7 @@ function MatchCard({ match, myRole, userId, rsvping, onRsvp, onUpdateStatus, onD
 
 // ─── MatchesTab ────────────────────────────────────────────────────────────────
 
-export default function MatchesTab({ tournamentId, apiFetch, myRole, userId, onGenerateTeams }) {
+export default function MatchesTab({ tournamentId, apiFetch, myRole, userId, onGenerateTeams, onEnterResult }) {
   const [matches, setMatches] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -497,6 +518,7 @@ export default function MatchesTab({ tournamentId, apiFetch, myRole, userId, onG
           onUpdateStatus={updateStatus}
           onDelete={deleteMatch}
           onGenerateTeams={onGenerateTeams}
+          onEnterResult={onEnterResult}
           tournamentId={tournamentId}
           apiFetch={apiFetch}
           onTeamsSaved={load}

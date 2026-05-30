@@ -54,6 +54,8 @@ function MainApp({ session, inviteToken }) {
   const [teamsPreselect, setTeamsPreselect] = useState(null)
   const [fromMatchData, setFromMatchData] = useState(null)
   const [teamsKey, setTeamsKey] = useState(0)
+  const [fromScoreMatch, setFromScoreMatch] = useState(null)
+  const [scoreKey, setScoreKey] = useState(0)
   const [showNewTournament, setShowNewTournament] = useState(false)
   const myUserId = session.user.id
   const inviteAcceptedRef = useRef(false)
@@ -156,6 +158,12 @@ function MainApp({ session, inviteToken }) {
     setTab('teams')
   }, [])
 
+  const goToEnterResult = useCallback((match) => {
+    setFromScoreMatch(match)
+    setScoreKey(k => k + 1)
+    setTab('score')
+  }, [])
+
   const handleSelectTournament = id => {
     setSelectedTid(id || null)
     setTab('standings')
@@ -248,6 +256,7 @@ function MainApp({ session, inviteToken }) {
               <button key={t.id} className={`nav-tab${tab === t.id ? ' active' : ''}`}
                 onClick={() => {
                   if (t.id === 'teams') { setFromMatchData(null); setTeamsPreselect(null); setTeamsKey(k => k + 1) }
+                  if (t.id === 'score') { setFromScoreMatch(null); setScoreKey(k => k + 1) }
                   setTab(t.id)
                 }}>
                 {t.label}
@@ -267,6 +276,7 @@ function MainApp({ session, inviteToken }) {
                 myRole={myRole}
                 userId={myUserId}
                 onGenerateTeams={goToTeamsWithPlayers}
+                onEnterResult={goToEnterResult}
               />
             )}
             {tab === 'rate' && (
@@ -285,7 +295,13 @@ function MainApp({ session, inviteToken }) {
               />
             )}
             {tab === 'score' && myRole === 'admin' && (
-              <EnterScoreTab tournamentId={selectedTid} apiFetch={apiFetch} players={tournamentPlayers} />
+              <EnterScoreTab
+                key={scoreKey}
+                tournamentId={selectedTid}
+                apiFetch={apiFetch}
+                players={tournamentPlayers}
+                fromScheduledMatch={fromScoreMatch}
+              />
             )}
             {tab === 'manage' && myRole === 'admin' && (
               <ManageTab
