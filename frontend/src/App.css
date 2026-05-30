@@ -1005,6 +1005,134 @@ h1 {
   color: var(--red);
 }
 
+/* ── Match saved teams display ──────────────────────────────── */
+.match-teams {
+  display: flex;
+  margin: 10px 0 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.match-team-side {
+  flex: 1;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.match-team-divider {
+  width: 1px;
+  background: var(--border-mid);
+  flex-shrink: 0;
+}
+
+.match-team-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.match-team-player {
+  font-size: 0.82rem;
+  color: var(--text);
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Chosen badge on solution card ──────────────────────────── */
+.chosen-badge {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--green);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+/* ── Edit Teams panel ───────────────────────────────────────── */
+.edit-teams-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.edit-team-col-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.edit-player-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-player-row:last-child {
+  border-bottom: none;
+}
+
+.edit-player-name {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.edit-icon-btn {
+  background: var(--surface3);
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+  border-radius: 4px;
+  width: 26px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.1s, color 0.1s;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.edit-icon-btn:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.edit-icon-btn.edit-remove:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.edit-warning {
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  color: #fbbf24;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  margin-bottom: 12px;
+}
+
 /* ── Rate Players redesign ──────────────────────────────────── */
 .rate-tab {
   width: 100%;

@@ -93,6 +93,11 @@ class PlayerRoleUpdate(BaseModel):
     role: str  # 'admin' or 'player'
 
 
+class TeamsUpdate(BaseModel):
+    team1_players: list[str]
+    team2_players: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -537,12 +542,18 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
     match_ids = [m["id"] for m in matches]
     rsvps_res = supabase.table("match_rsvps").select("scheduled_match_id,user_id,status").in_("scheduled_match_id", match_ids).execute()
     rsvps_by_match: dict[int, list] = defaultdict(list)
-    all_rsvp_uids: list[str] = []
+    all_uids: set[str] = set()
     for r in rsvps_res.data:
         rsvps_by_match[r["scheduled_match_id"]].append(r)
-        all_rsvp_uids.append(r["user_id"])
+        all_uids.add(r["user_id"])
 
-    names = _display_names(list(set(all_rsvp_uids)))
+    for m in matches:
+        for uid in (m.get("team1_players") or []):
+            all_uids.add(uid)
+        for uid in (m.get("team2_players") or []):
+            all_uids.add(uid)
+
+    names = _display_names(list(all_uids))
 
     result = []
     for m in matches:
@@ -551,6 +562,8 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
             {"user_id": r["user_id"], "display_name": names.get(r["user_id"]), "status": r["status"]}
             for r in rsvps
         ]
+        t1 = m.get("team1_players") or []
+        t2 = m.get("team2_players") or []
         result.append({
             "id": m["id"],
             "scheduled_at": m["scheduled_at"],
@@ -560,8 +573,23 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
             "created_by": m["created_by"],
             "rsvps": enriched_rsvps,
             "rsvp_count": sum(1 for r in rsvps if r["status"] == "in"),
+            "team1": [{"user_id": uid, "display_name": names.get(uid)} for uid in t1],
+            "team2": [{"user_id": uid, "display_name": names.get(uid)} for uid in t2],
         })
     return result
+
+
+@app.put("/api/scheduled-matches/{match_id}/teams")
+def save_match_teams(match_id: int, body: TeamsUpdate, user_id: str = Depends(get_required_user)):
+    match_res = supabase.table("scheduled_matches").select("tournament_id").eq("id", match_id).execute()
+    if not match_res.data:
+        raise HTTPException(status_code=404, detail="Scheduled match not found")
+    _require_admin(match_res.data[0]["tournament_id"], user_id)
+    res = supabase.table("scheduled_matches").update({
+        "team1_players": body.team1_players,
+        "team2_players": body.team2_players,
+    }).eq("id", match_id).execute()
+    return res.data[0]
 
 
 @app.post("/api/tournaments/{tournament_id}/scheduled-matches", status_code=201)

@@ -52,6 +52,7 @@ function MainApp({ session, inviteToken }) {
   const [inviteNote, setInviteNote] = useState(null) // 'accepted' | 'error'
   const [inviteErrMsg, setInviteErrMsg] = useState(null)
   const [teamsPreselect, setTeamsPreselect] = useState(null)
+  const [fromMatchData, setFromMatchData] = useState(null)
   const [teamsKey, setTeamsKey] = useState(0)
   const [showNewTournament, setShowNewTournament] = useState(false)
   const myUserId = session.user.id
@@ -148,8 +149,9 @@ function MainApp({ session, inviteToken }) {
       .then(r => r.json()).then(setTournamentPlayers).catch(() => {})
   }
 
-  const goToTeamsWithPlayers = useCallback(playerIds => {
+  const goToTeamsWithPlayers = useCallback((playerIds, match = null) => {
     setTeamsPreselect(playerIds)
+    setFromMatchData(match)
     setTeamsKey(k => k + 1)
     setTab('teams')
   }, [])
@@ -244,7 +246,10 @@ function MainApp({ session, inviteToken }) {
           <nav className="nav-bar">
             {tabs.map(t => (
               <button key={t.id} className={`nav-tab${tab === t.id ? ' active' : ''}`}
-                onClick={() => setTab(t.id)}>
+                onClick={() => {
+                  if (t.id === 'teams') { setFromMatchData(null); setTeamsPreselect(null); setTeamsKey(k => k + 1) }
+                  setTab(t.id)
+                }}>
                 {t.label}
               </button>
             ))}
@@ -276,6 +281,7 @@ function MainApp({ session, inviteToken }) {
                 tournamentId={selectedTid}
                 apiFetch={apiFetch}
                 preselectedIds={teamsPreselect}
+                fromMatch={fromMatchData}
               />
             )}
             {tab === 'score' && myRole === 'admin' && (

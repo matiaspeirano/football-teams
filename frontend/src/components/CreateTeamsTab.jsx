@@ -36,18 +36,36 @@ function ConstraintSection({ title, pairs, onRemove, p1, setP1, p2, setP2, onAdd
   )
 }
 
-function SolutionCard({ solution, index }) {
+function SolutionCard({ solution, index, onChoose, chosen, saving, anyChoosing }) {
   return (
     <div className="solution-card">
       <div className="solution-header">
         <span className="option-label">Option {index + 1}</span>
-        <span className="diff-badge">Δ {solution.difference}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {chosen && <span className="chosen-badge">✓ Chosen</span>}
+          <span className="diff-badge">Δ {solution.difference}</span>
+        </div>
       </div>
       <div className="teams">
         <TeamColumn label="Team 1" players={solution.team1} total={solution.score_team1} />
         <div className="team-divider" />
         <TeamColumn label="Team 2" players={solution.team2} total={solution.score_team2} />
       </div>
+      {onChoose && (
+        <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border-mid)' }}>
+          <button
+            className="add-btn"
+            onClick={() => onChoose(solution, index)}
+            disabled={saving || (anyChoosing && !saving)}
+            style={{
+              width: '100%', padding: 10,
+              ...(chosen ? { background: 'var(--green)', color: '#052e16', fontWeight: 800 } : {}),
+            }}
+          >
+            {saving ? 'Saving…' : chosen ? '✓ Teams Saved' : 'Choose this'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -72,12 +90,16 @@ function TeamColumn({ label, players, total }) {
   )
 }
 
-export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds }) {
+export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds, fromMatch }) {
+  const initIds = fromMatch
+    ? fromMatch.rsvps.filter(r => r.status === 'in').map(r => r.user_id)
+    : (preselectedIds ?? [])
+
   const [players, setPlayers] = useState([])
   const [playersLoading, setPlayersLoading] = useState(true)
-  const [selected, setSelected] = useState(() => new Set(preselectedIds ?? []))
+  const [selected, setSelected] = useState(() => new Set(initIds))
   const [numPerTeam, setNumPerTeam] = useState(
-    preselectedIds?.length >= 4 ? Math.floor(preselectedIds.length / 2) : 6
+    initIds.length >= 4 ? Math.floor(initIds.length / 2) : 6
   )
   const [mustTogether, setMustTogether] = useState([])
   const [mustSeparate, setMustSeparate] = useState([])
@@ -88,6 +110,11 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds 
   const [solutions, setSolutions] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // fromMatch choosing state
+  const [chosenIndex, setChosenIndex] = useState(null)
+  const [savingIndex, setSavingIndex] = useState(null)
+  const [chooseError, setChooseError] = useState(null)
 
   useEffect(() => {
     setPlayersLoading(true)
@@ -123,7 +150,7 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds 
   }
 
   const generate = async () => {
-    setLoading(true); setError(null); setSolutions(null)
+    setLoading(true); setError(null); setSolutions(null); setChosenIndex(null); setChooseError(null)
     try {
       const res = await apiFetch(`/api/tournaments/${tournamentId}/generate-teams`, {
         method: 'POST',
@@ -144,8 +171,39 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds 
     }
   }
 
+  const chooseSolution = async (sol, index) => {
+    setSavingIndex(index); setChooseError(null)
+    try {
+      const res = await apiFetch(`/api/scheduled-matches/${fromMatch.id}/teams`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          team1_players: sol.team1.map(p => p.id),
+          team2_players: sol.team2.map(p => p.id),
+        }),
+      })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Failed to save teams') }
+      setChosenIndex(index)
+    } catch (e) {
+      setChooseError(e.message)
+    } finally {
+      setSavingIndex(null)
+    }
+  }
+
   return (
     <>
+      {fromMatch && (
+        <div style={{
+          background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.18)',
+          borderRadius: 'var(--radius-sm)', padding: '10px 14px', marginBottom: 16,
+          fontSize: '0.82rem', color: 'var(--text-dim)',
+        }}>
+          Generating teams for the match on <strong style={{ color: 'var(--text)' }}>
+            {new Date(fromMatch.scheduled_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+          </strong> — RSVP'd players pre-selected.
+        </div>
+      )}
+
       <div className="config-row">
         <label>Players per team</label>
         <input type="number" min={2} max={15} value={numPerTeam}
@@ -217,7 +275,24 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds 
       {solutions && (
         <div id="results" className="solutions">
           <h2 className="results-title">Results</h2>
-          {solutions.map((sol, i) => <SolutionCard key={i} solution={sol} index={i} />)}
+          {chooseError && <div className="error" style={{ marginBottom: 12 }}>{chooseError}</div>}
+          {chosenIndex !== null && (
+            <div className="success-msg" style={{ marginBottom: 12 }}>
+              Teams saved! You can still pick a different option.
+              <button onClick={() => setChosenIndex(null)}>×</button>
+            </div>
+          )}
+          {solutions.map((sol, i) => (
+            <SolutionCard
+              key={i}
+              solution={sol}
+              index={i}
+              onChoose={fromMatch ? chooseSolution : undefined}
+              chosen={chosenIndex === i}
+              saving={savingIndex === i}
+              anyChoosing={savingIndex !== null}
+            />
+          ))}
         </div>
       )}
     </>
