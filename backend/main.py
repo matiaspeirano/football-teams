@@ -66,6 +66,7 @@ class InviteAccept(BaseModel):
 
 class ProfileUpdate(BaseModel):
     display_name: str
+    phone: Optional[str] = None
 
 
 class ScheduledMatchCreate(BaseModel):
@@ -80,6 +81,16 @@ class RSVPCreate(BaseModel):
 
 class ScheduledMatchStatusUpdate(BaseModel):
     status: str  # 'open', 'confirmed', 'cancelled', 'played'
+
+
+class TournamentUpdate(BaseModel):
+    name: str
+    year: int
+    season: str
+
+
+class PlayerRoleUpdate(BaseModel):
+    role: str  # 'admin' or 'player'
 
 
 # ---------------------------------------------------------------------------
@@ -194,14 +205,17 @@ def _generate_solutions(players: list[dict], n_solutions: int, randomization_lev
 def get_me(user_id: str = Depends(get_required_user)):
     res = supabase.table("profiles").select("*").eq("id", user_id).execute()
     if not res.data:
-        return {"id": user_id, "display_name": None, "linked_player_name": None}
+        return {"id": user_id, "display_name": None, "linked_player_name": None, "phone": None}
     p = res.data[0]
-    return {"id": user_id, "display_name": p.get("display_name"), "linked_player_name": p.get("linked_player_name")}
+    return {"id": user_id, "display_name": p.get("display_name"), "linked_player_name": p.get("linked_player_name"), "phone": p.get("phone")}
 
 
 @app.put("/api/profile")
 def update_profile(body: ProfileUpdate, user_id: str = Depends(get_required_user)):
-    supabase.table("profiles").upsert({"id": user_id, "display_name": body.display_name}).execute()
+    payload = {"id": user_id, "display_name": body.display_name}
+    if body.phone is not None:
+        payload["phone"] = body.phone
+    supabase.table("profiles").upsert(payload).execute()
     return {"success": True}
 
 
@@ -227,6 +241,19 @@ def create_tournament(body: TournamentCreate, user_id: str = Depends(get_require
     return tournament
 
 
+@app.put("/api/tournaments/{tournament_id}")
+def update_tournament(tournament_id: int, body: TournamentUpdate, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    res = supabase.table("tournaments").update({
+        "name": body.name,
+        "year": body.year,
+        "season": body.season,
+    }).eq("id", tournament_id).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    return res.data[0]
+
+
 # ---------------------------------------------------------------------------
 # TOURNAMENT PLAYERS
 # ---------------------------------------------------------------------------
@@ -236,6 +263,9 @@ def get_tournament_players(tournament_id: int, user_id: str = Depends(get_requir
     members_res = supabase.table("tournament_players").select("user_id,role").eq("tournament_id", tournament_id).execute()
     if not members_res.data:
         return []
+
+    tournament_res = supabase.table("tournaments").select("created_by").eq("id", tournament_id).execute()
+    owner_id = tournament_res.data[0]["created_by"] if tournament_res.data else None
 
     member_ids = [m["user_id"] for m in members_res.data]
     names = _display_names(member_ids)
@@ -249,6 +279,7 @@ def get_tournament_players(tournament_id: int, user_id: str = Depends(get_requir
             "user_id": uid,
             "display_name": names.get(uid),
             "role": m["role"],
+            "is_owner": uid == owner_id,
             "avg_play":  round(r.get("avg_play",  3.0), 2),
             "avg_run":   round(r.get("avg_run",   3.0), 2),
             "avg_goals": round(r.get("avg_goals", 3.0), 2),
@@ -262,6 +293,35 @@ def get_my_role(tournament_id: int, user_id: str = Depends(get_required_user)):
     res = supabase.table("tournament_players").select("role").eq("tournament_id", tournament_id).eq("user_id", user_id).execute()
     role = res.data[0]["role"] if res.data else None
     return {"role": role}
+
+
+@app.put("/api/tournaments/{tournament_id}/players/{player_id}/role")
+def update_player_role(tournament_id: int, player_id: str, body: PlayerRoleUpdate, current_user_id: str = Depends(get_required_user)):
+    if body.role not in ("admin", "player"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'player'")
+    _require_admin(tournament_id, current_user_id)
+    tournament_res = supabase.table("tournaments").select("created_by").eq("id", tournament_id).execute()
+    owner_id = tournament_res.data[0]["created_by"] if tournament_res.data else None
+    if player_id == owner_id:
+        raise HTTPException(status_code=403, detail="The tournament owner's role cannot be changed.")
+    if current_user_id != owner_id:
+        raise HTTPException(status_code=403, detail="Only the tournament owner can change admin roles.")
+    supabase.table("tournament_players").update({"role": body.role}).eq("tournament_id", tournament_id).eq("user_id", player_id).execute()
+    return {"role": body.role}
+
+
+@app.delete("/api/tournaments/{tournament_id}/players/{player_id}", status_code=204)
+def remove_player(tournament_id: int, player_id: str, current_user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, current_user_id)
+    tournament_res = supabase.table("tournaments").select("created_by").eq("id", tournament_id).execute()
+    owner_id = tournament_res.data[0]["created_by"] if tournament_res.data else None
+    if player_id == owner_id:
+        raise HTTPException(status_code=403, detail="The tournament owner cannot be removed.")
+    if current_user_id != owner_id:
+        player_res = supabase.table("tournament_players").select("role").eq("tournament_id", tournament_id).eq("user_id", player_id).execute()
+        if player_res.data and player_res.data[0]["role"] == "admin":
+            raise HTTPException(status_code=403, detail="Only the owner can remove admins.")
+    supabase.table("tournament_players").delete().eq("tournament_id", tournament_id).eq("user_id", player_id).execute()
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +498,14 @@ def generate_teams(tournament_id: int, body: GenerateTeamsRequest, user_id: str 
 # ---------------------------------------------------------------------------
 # INVITES
 # ---------------------------------------------------------------------------
+
+@app.get("/api/tournaments/{tournament_id}/invites")
+def list_invites(tournament_id: int, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    now = datetime.now(timezone.utc).isoformat()
+    res = supabase.table("invite_links").select("token,role,expires_at,created_by").eq("tournament_id", tournament_id).eq("used", False).gt("expires_at", now).execute()
+    return res.data
+
 
 @app.post("/api/tournaments/{tournament_id}/invite", status_code=201)
 def create_invite(tournament_id: int, body: InviteCreate, user_id: str = Depends(get_required_user)):
