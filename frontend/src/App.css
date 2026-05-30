@@ -427,6 +427,7 @@ h1 {
 /* ── Navigation bar ─────────────────────────────────────────── */
 .nav-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   background: var(--surface);
   border: 1px solid var(--border-mid);
@@ -436,7 +437,8 @@ h1 {
 }
 
 .nav-tab {
-  flex: 1;
+  flex: 1 1 calc(25% - 3px);
+  text-align: center;
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -448,6 +450,8 @@ h1 {
   transition: background 0.12s, color 0.12s;
   -webkit-tap-highlight-color: transparent;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nav-tab.active {
@@ -527,7 +531,9 @@ h1 {
 }
 
 .form-field select,
-.form-field input[type="date"] {
+.form-field input[type="date"],
+.form-field input[type="datetime-local"],
+.form-field input[type="number"] {
   background: var(--surface3);
   border: 1px solid var(--border-mid);
   color: var(--text);
@@ -541,7 +547,9 @@ h1 {
 }
 
 .form-field select:focus,
-.form-field input[type="date"]:focus {
+.form-field input[type="date"]:focus,
+.form-field input[type="datetime-local"]:focus,
+.form-field input[type="number"]:focus {
   border-color: var(--green);
 }
 
@@ -852,12 +860,148 @@ h1 {
   text-align: center;
 }
 
-/* ── Nav bar scroll on small screens ───────────────────────── */
-.nav-bar {
-  overflow-x: auto;
-  scrollbar-width: none;
+/* ── Scheduled match cards ──────────────────────────────────── */
+.match-card {
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
 }
 
-.nav-bar::-webkit-scrollbar {
-  display: none;
+.match-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+  gap: 8px;
 }
+
+.match-datetime {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.match-location {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.match-status-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.match-rsvp-count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.match-in-players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.match-player-chip {
+  background: var(--green-dim);
+  color: #d1fae5;
+  border: 1px solid var(--green-mid);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.match-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.match-rsvp-row {
+  display: flex;
+  gap: 6px;
+}
+
+.rsvp-btn {
+  flex: 1;
+  background: var(--surface3);
+  border: 1.5px solid var(--border-mid);
+  color: var(--text-dim);
+  padding: 9px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rsvp-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rsvp-btn.rsvp-in-active {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: #d1fae5;
+}
+
+.rsvp-btn.rsvp-out-active {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.match-admin-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.cancel-match-btn {
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: var(--red);
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s;
+}
+
+.cancel-match-btn:active {
+  background: rgba(248, 113, 113, 0.2);
+}
+
+.delete-match-btn {
+  background: var(--surface3);
+  border: 1px solid var(--border-mid);
+  color: var(--text-dim);
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.delete-match-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+

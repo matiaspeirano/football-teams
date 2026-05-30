@@ -68,6 +68,20 @@ class ProfileUpdate(BaseModel):
     display_name: str
 
 
+class ScheduledMatchCreate(BaseModel):
+    scheduled_at: str
+    location: str
+    players_needed: int
+
+
+class RSVPCreate(BaseModel):
+    status: str  # 'in' or 'out'
+
+
+class ScheduledMatchStatusUpdate(BaseModel):
+    status: str  # 'open', 'confirmed', 'cancelled', 'played'
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -439,6 +453,116 @@ def create_invite(tournament_id: int, body: InviteCreate, user_id: str = Depends
         "used": False,
     }).execute()
     return {"invite_url": f"/invite/{token}"}
+
+
+# ---------------------------------------------------------------------------
+# SCHEDULED MATCHES & RSVP
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tournaments/{tournament_id}/scheduled-matches")
+def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_required_user)):
+    matches_res = supabase.table("scheduled_matches").select("*").eq("tournament_id", tournament_id).order("scheduled_at").execute()
+    matches = matches_res.data
+    if not matches:
+        return []
+
+    match_ids = [m["id"] for m in matches]
+    rsvps_res = supabase.table("match_rsvps").select("scheduled_match_id,user_id,status").in_("scheduled_match_id", match_ids).execute()
+    rsvps_by_match: dict[int, list] = defaultdict(list)
+    all_rsvp_uids: list[str] = []
+    for r in rsvps_res.data:
+        rsvps_by_match[r["scheduled_match_id"]].append(r)
+        all_rsvp_uids.append(r["user_id"])
+
+    names = _display_names(list(set(all_rsvp_uids)))
+
+    result = []
+    for m in matches:
+        rsvps = rsvps_by_match.get(m["id"], [])
+        enriched_rsvps = [
+            {"user_id": r["user_id"], "display_name": names.get(r["user_id"]), "status": r["status"]}
+            for r in rsvps
+        ]
+        result.append({
+            "id": m["id"],
+            "scheduled_at": m["scheduled_at"],
+            "location": m["location"],
+            "players_needed": m["players_needed"],
+            "status": m["status"],
+            "created_by": m["created_by"],
+            "rsvps": enriched_rsvps,
+            "rsvp_count": sum(1 for r in rsvps if r["status"] == "in"),
+        })
+    return result
+
+
+@app.post("/api/tournaments/{tournament_id}/scheduled-matches", status_code=201)
+def create_scheduled_match(tournament_id: int, body: ScheduledMatchCreate, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    res = supabase.table("scheduled_matches").insert({
+        "tournament_id": tournament_id,
+        "scheduled_at": body.scheduled_at,
+        "location": body.location,
+        "players_needed": body.players_needed,
+        "status": "open",
+        "created_by": user_id,
+    }).execute()
+    return res.data[0]
+
+
+@app.post("/api/scheduled-matches/{match_id}/rsvp")
+def rsvp_to_match(match_id: int, body: RSVPCreate, user_id: str = Depends(get_required_user)):
+    if body.status not in ("in", "out"):
+        raise HTTPException(status_code=400, detail="status must be 'in' or 'out'")
+
+    match_res = supabase.table("scheduled_matches").select("*").eq("id", match_id).execute()
+    if not match_res.data:
+        raise HTTPException(status_code=404, detail="Scheduled match not found")
+    match = match_res.data[0]
+
+    supabase.table("match_rsvps").upsert(
+        {"scheduled_match_id": match_id, "user_id": user_id, "status": body.status},
+        on_conflict="scheduled_match_id,user_id",
+    ).execute()
+
+    in_count_res = supabase.table("match_rsvps").select("user_id").eq("scheduled_match_id", match_id).eq("status", "in").execute()
+    in_count = len(in_count_res.data)
+
+    new_status = match["status"]
+    if in_count >= match["players_needed"] and match["status"] == "open":
+        new_status = "confirmed"
+    elif in_count < match["players_needed"] and match["status"] == "confirmed":
+        new_status = "open"
+
+    if new_status != match["status"]:
+        supabase.table("scheduled_matches").update({"status": new_status}).eq("id", match_id).execute()
+
+    return {"rsvp_count": in_count, "match_status": new_status}
+
+
+@app.put("/api/scheduled-matches/{match_id}/status")
+def update_scheduled_match_status(match_id: int, body: ScheduledMatchStatusUpdate, user_id: str = Depends(get_required_user)):
+    if body.status not in ("open", "confirmed", "cancelled", "played"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    match_res = supabase.table("scheduled_matches").select("tournament_id").eq("id", match_id).execute()
+    if not match_res.data:
+        raise HTTPException(status_code=404, detail="Scheduled match not found")
+
+    _require_admin(match_res.data[0]["tournament_id"], user_id)
+    supabase.table("scheduled_matches").update({"status": body.status}).eq("id", match_id).execute()
+    return {"status": body.status}
+
+
+@app.delete("/api/scheduled-matches/{match_id}", status_code=204)
+def delete_scheduled_match(match_id: int, user_id: str = Depends(get_required_user)):
+    match_res = supabase.table("scheduled_matches").select("tournament_id").eq("id", match_id).execute()
+    if not match_res.data:
+        raise HTTPException(status_code=404, detail="Scheduled match not found")
+
+    _require_admin(match_res.data[0]["tournament_id"], user_id)
+    supabase.table("match_rsvps").delete().eq("scheduled_match_id", match_id).execute()
+    supabase.table("scheduled_matches").delete().eq("id", match_id).execute()
 
 
 @app.post("/api/invite/accept")
