@@ -901,7 +901,10 @@ def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user))
 
     invite = res.data[0]
 
-    if parse_date(invite["expires_at"]) < datetime.now(timezone.utc):
+    expires_at = parse_date(invite["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invite expired")
 
     existing = supabase.table("tournament_players").select("user_id").eq("tournament_id", invite["tournament_id"]).eq("user_id", user_id).execute()
