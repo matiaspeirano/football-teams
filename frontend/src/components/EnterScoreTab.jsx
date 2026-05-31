@@ -10,11 +10,8 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
   const [team1, setTeam1] = useState(new Set())
   const [team2, setTeam2] = useState(new Set())
   const [result, setResult] = useState('')
-  const [mvp, setMvp] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-
-  const matchIds = [...team1, ...team2]
 
   const toggleTeam1 = id => {
     if (!team1.has(id) && team1.size >= numPerTeam) return
@@ -24,7 +21,6 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
       else { next.add(id); setTeam2(p => { const n = new Set(p); n.delete(id); return n }) }
       return next
     })
-    if (mvp === id) setMvp('')
   }
 
   const toggleTeam2 = id => {
@@ -35,10 +31,9 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
       else { next.add(id); setTeam1(p => { const n = new Set(p); n.delete(id); return n }) }
       return next
     })
-    if (mvp === id) setMvp('')
   }
 
-  const reset = () => { setTeam1(new Set()); setTeam2(new Set()); setMvp('') }
+  const reset = () => { setTeam1(new Set()); setTeam2(new Set()) }
 
   const submit = async () => {
     setLoading(true); setError(null)
@@ -50,7 +45,6 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
           team1_players: [...team1],
           team2_players: [...team2],
           result,
-          mvp: mvp || null,
         }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Server error') }
@@ -119,18 +113,6 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
         </div>
       </div>
 
-      <div className="form-field">
-        <label>MVP <span className="optional">(optional)</span></label>
-        <select value={mvp} onChange={e => setMvp(e.target.value)} disabled={matchIds.length === 0}>
-          <option value="">None</option>
-          {matchIds.map(id => (
-            <option key={id} value={id}>
-              {players.find(p => p.user_id === id)?.display_name ?? id}
-            </option>
-          ))}
-        </select>
-      </div>
-
       {error && <div className="error">{error}</div>}
 
       <button className="generate-btn"
@@ -146,7 +128,6 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
   const [eligibleMatches, setEligibleMatches] = useState(null)
   const [selectedMatchId, setSelectedMatchId] = useState(initialMatch?.id ?? '')
   const [result, setResult] = useState('')
-  const [mvp, setMvp] = useState('')
   const [loading, setLoading] = useState(false)
   const [fetchError, setFetchError] = useState(null)
   const [error, setError] = useState(null)
@@ -163,10 +144,6 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
 
   const selectedMatch = eligibleMatches?.find(m => m.id === Number(selectedMatchId)) ?? initialMatch ?? null
 
-  const allPlayers = selectedMatch
-    ? [...(selectedMatch.team1 ?? []), ...(selectedMatch.team2 ?? [])]
-    : []
-
   const submit = async () => {
     if (!selectedMatch || !result) return
     setLoading(true); setError(null)
@@ -179,7 +156,6 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
           team1_players: (selectedMatch.team1 ?? []).map(p => p.user_id),
           team2_players: (selectedMatch.team2 ?? []).map(p => p.user_id),
           result,
-          mvp: mvp || null,
           scheduled_match_id: selectedMatch.id,
         }),
       })
@@ -209,7 +185,7 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
       {!initialMatch && (
         <div className="form-field">
           <label>Match</label>
-          <select value={selectedMatchId} onChange={e => { setSelectedMatchId(e.target.value); setResult(''); setMvp('') }}>
+          <select value={selectedMatchId} onChange={e => { setSelectedMatchId(e.target.value); setResult('') }}>
             <option value="">Select a match…</option>
             {eligibleMatches.map(m => {
               const d = new Date(m.scheduled_at)
@@ -246,16 +222,6 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
                   onClick={() => setResult(val)}>{label}</button>
               ))}
             </div>
-          </div>
-
-          <div className="form-field">
-            <label>MVP <span className="optional">(optional)</span></label>
-            <select value={mvp} onChange={e => setMvp(e.target.value)} disabled={allPlayers.length === 0}>
-              <option value="">None</option>
-              {allPlayers.map(p => (
-                <option key={p.user_id} value={p.user_id}>{p.display_name ?? p.user_id}</option>
-              ))}
-            </select>
           </div>
 
           {error && <div className="error">{error}</div>}

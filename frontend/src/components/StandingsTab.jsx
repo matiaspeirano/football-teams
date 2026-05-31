@@ -31,7 +31,9 @@ export default function StandingsTab({ tournamentId, apiFetch }) {
             {matchCount} {matchCount === 1 ? 'match' : 'matches'} played
           </div>
           {standings.length === 0 && (
-            <div className="status-msg">No matches recorded yet.</div>
+            <div className="empty-state">
+              No matches played yet — standings will appear once results are in.
+            </div>
           )}
           {standings.length > 0 && (
             <div className="table-wrap">

@@ -200,6 +200,7 @@ export default function ManageTab({
   }
 
   const removePlayer = async (playerId) => {
+    if (!window.confirm('Remove this player from the tournament?')) return
     setRemoving(prev => ({ ...prev, [playerId]: true }))
     setPlayerError(null)
     try {
@@ -314,8 +315,8 @@ export default function ManageTab({
         {playerError && <div className="error" style={{ marginBottom: 12 }}>{playerError}</div>}
 
         {filtered.length === 0 && (
-          <div className="status-msg" style={{ padding: '16px 0' }}>
-            {q ? 'No players match.' : 'No players yet.'}
+          <div className="empty-state">
+            {q ? 'No players match your search.' : 'No players yet.'}
           </div>
         )}
 

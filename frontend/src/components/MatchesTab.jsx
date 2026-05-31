@@ -4,6 +4,168 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0') + ':00')
 
+function formatTimeRemaining(seconds) {
+  if (seconds == null || seconds <= 0) return null
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h > 0) return `${h}h ${m}m ${s}s`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
+}
+
+function formatClosesAt(isoStr) {
+  if (!isoStr) return null
+  const d = new Date(isoStr)
+  if (isNaN(d.getTime())) return null
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} at ${hh}:${mm}`
+}
+
+// ─── MVP Section ───────────────────────────────────────────────────────────────
+
+function MvpSection({ match, userId, apiFetch }) {
+  const [pollData, setPollData] = useState(null)
+  const [voting, setVoting] = useState(false)
+  const [secsLeft, setSecsLeft] = useState(null)
+
+  const pollStatus = match.mvp_poll_status
+  const matchId = match.result_match_id
+
+  // Fetch poll detail whenever the card is for an open poll
+  useEffect(() => {
+    if (pollStatus !== 'open' || !matchId) return
+    apiFetch(`/api/matches/${matchId}/mvp-poll`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setPollData(d) })
+      .catch(() => {})
+  }, [matchId, pollStatus, apiFetch])
+
+  // Derive the countdown from closes_at (client-side, avoids timezone issues with
+  // time_remaining_seconds when the backend stored a naive timestamp).
+  // Re-runs whenever closes_at changes (e.g. after a vote re-fetch).
+  useEffect(() => {
+    const closesAt = pollData?.closes_at
+    if (!closesAt) return
+    const computeInitial = () =>
+      Math.max(0, Math.floor((new Date(closesAt).getTime() - Date.now()) / 1000))
+    const initial = computeInitial()
+    setSecsLeft(initial)
+    if (initial <= 0) return
+    const id = setInterval(() => setSecsLeft(s => Math.max(0, (s ?? 0) - 1)), 1000)
+    return () => clearInterval(id)
+  }, [pollData?.closes_at])
+
+  // Re-fetch 2.5 s after the local countdown hits zero so resolved winners appear
+  useEffect(() => {
+    if (secsLeft !== 0 || !matchId) return
+    const id = setTimeout(() => {
+      apiFetch(`/api/matches/${matchId}/mvp-poll`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setPollData(d) })
+        .catch(() => {})
+    }, 2500)
+    return () => clearTimeout(id)
+  }, [secsLeft === 0])
+
+  const castVote = async (candidateId) => {
+    if (voting || !matchId) return
+    setVoting(true)
+    try {
+      const res = await apiFetch(`/api/matches/${matchId}/vote-mvp`, {
+        method: 'POST',
+        body: JSON.stringify({ voted_for_id: candidateId }),
+      })
+      if (res.ok) {
+        const updated = await apiFetch(`/api/matches/${matchId}/mvp-poll`)
+        if (updated.ok) setPollData(await updated.json())
+      }
+    } finally {
+      setVoting(false)
+    }
+  }
+
+  if (!match.result || match.result === 'draw') {
+    return <div className="mvp-no-poll">No MVP — draw</div>
+  }
+
+  if (pollStatus === 'closed') {
+    const names = (match.mvp_winner_names ?? []).filter(Boolean)
+    if (names.length === 0) {
+      return <div className="mvp-no-poll">No MVP votes recorded</div>
+    }
+    const label = names.length > 1 ? 'Co-MVPs' : 'MVP'
+    return (
+      <div className="mvp-result">
+        <span className="mvp-result-trophy">🏆</span>
+        <span>{label}: <strong>{names.join(', ')}</strong></span>
+      </div>
+    )
+  }
+
+  if (pollStatus === 'open') {
+    if (!pollData) {
+      return <div className="mvp-poll-loading">Loading poll…</div>
+    }
+
+    const expired = secsLeft === 0
+    const closesLabel = formatClosesAt(pollData.closes_at)
+    const countdown = (!expired && secsLeft != null && secsLeft > 0)
+      ? formatTimeRemaining(secsLeft)
+      : null
+
+    return (
+      <div className="mvp-poll">
+        <div className="mvp-poll-header">
+          <span className="mvp-poll-title">Vote for MVP</span>
+          <span className="mvp-poll-countdown">
+            {expired
+              ? 'Poll closing…'
+              : closesLabel
+                ? `Closes ${closesLabel}`
+                : countdown
+                  ? `closes in ${countdown}`
+                  : null}
+          </span>
+        </div>
+        {countdown && !expired && (
+          <div className="mvp-poll-ticker">{countdown}</div>
+        )}
+        <div className="mvp-poll-candidates">
+          {pollData.candidates.map(c => {
+            const isMyVote = pollData.my_vote === c.user_id
+            return (
+              <button
+                key={c.user_id}
+                className={`mvp-candidate-btn${isMyVote ? ' mvp-candidate-voted' : ''}`}
+                onClick={() => castVote(c.user_id)}
+                disabled={voting || expired}
+              >
+                <span className="mvp-candidate-name">{c.display_name ?? c.user_id}</span>
+                <span className="mvp-candidate-votes">{c.vote_count}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  // Legacy: old match with a direct MVP set (mvp_poll_status is null)
+  if (match.mvp_display_name) {
+    return (
+      <div className="mvp-result">
+        <span className="mvp-result-trophy">🏆</span>
+        <span>MVP: <strong>{match.mvp_display_name}</strong></span>
+      </div>
+    )
+  }
+
+  return null
+}
+
 const todayStr = () => {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -244,14 +406,14 @@ function MatchCard({ match, myRole, userId, rsvping, onRsvp, onUpdateStatus, onD
           )}
 
           {hasResult && (
-            <div className="match-result-summary">
-              <span className="result-outcome">
-                {match.result === 'team1' ? 'Team 1 Won' : match.result === 'team2' ? 'Team 2 Won' : 'Draw'}
-              </span>
-              {match.mvp_display_name && (
-                <span className="match-mvp">MVP: {match.mvp_display_name}</span>
-              )}
-            </div>
+            <>
+              <div className="match-result-summary">
+                <span className="result-outcome">
+                  {match.result === 'team1' ? 'Team 1 Won' : match.result === 'team2' ? 'Team 2 Won' : 'Draw'}
+                </span>
+              </div>
+              <MvpSection match={match} userId={userId} apiFetch={apiFetch} />
+            </>
           )}
 
           <div className="match-actions">
@@ -401,6 +563,7 @@ export default function MatchesTab({ tournamentId, apiFetch, myRole, userId, onG
   }
 
   const updateStatus = async (matchId, status) => {
+    if (status === 'cancelled' && !window.confirm('Cancel this match?')) return
     await apiFetch(`/api/scheduled-matches/${matchId}/status`, {
       method: 'PUT',
       body: JSON.stringify({ status }),
@@ -409,7 +572,7 @@ export default function MatchesTab({ tournamentId, apiFetch, myRole, userId, onG
   }
 
   const deleteMatch = async matchId => {
-    if (!window.confirm('Delete this match?')) return
+    if (!window.confirm('Delete this match? This cannot be undone.')) return
     await apiFetch(`/api/scheduled-matches/${matchId}`, { method: 'DELETE' })
     load()
   }
@@ -502,9 +665,9 @@ export default function MatchesTab({ tournamentId, apiFetch, myRole, userId, onG
       {loading && <div className="status-msg">Loading matches…</div>}
       {error && <div className="error">{error}</div>}
       {matches && matches.length === 0 && !loading && (
-        <div className="status-msg">
+        <div className="empty-state">
           No matches scheduled yet.
-          {myRole === 'admin' && <span style={{ display: 'block', marginTop: 6, fontSize: '0.82rem' }}>Use + Schedule Match above to create one.</span>}
+          {myRole === 'admin' && <span className="empty-state-hint">Use + Schedule Match above to create one.</span>}
         </div>
       )}
       {matches && matches.map(match => (

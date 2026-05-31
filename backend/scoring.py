@@ -2,13 +2,12 @@
 # Match point values
 # ---------------------------------------------------------------------------
 POINTS_WIN = 3
-POINTS_DRAW = 1
-POINTS_LOSS = 0
+POINTS_DRAW = 2
+POINTS_LOSS = 1
 
 # ---------------------------------------------------------------------------
 # Bonus point values
 # ---------------------------------------------------------------------------
-PRESENCE_PER_MATCH = 1
 MVP_PER_AWARD = 1
 
 # ---------------------------------------------------------------------------
@@ -22,6 +21,6 @@ def effectivity(match_points: int, matches_played: int) -> float:
     return match_points / (matches_played * POINTS_WIN)
 
 
-def total_score(match_points: int, matches_played: int, mvp_count: int, presence: int) -> float:
+def total_score(match_points: int, matches_played: int, mvp_count: int) -> float:
     eff = effectivity(match_points, matches_played)
-    return (match_points * eff) + (mvp_count * MVP_PER_AWARD) + (presence * PRESENCE_PER_MATCH)
+    return (match_points * eff) + (mvp_count * MVP_PER_AWARD)

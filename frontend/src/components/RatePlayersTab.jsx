@@ -71,6 +71,7 @@ export default function RatePlayersTab({ tournamentId, apiFetch }) {
   }
 
   if (loading) return <div className="status-msg">Loading players…</div>
+  if (error && players.length === 0) return <div className="error" style={{ marginTop: 8 }}>{error}</div>
 
   const current = players[currentIndex]
   const currentRating = current ? ratings[current.user_id] : null
@@ -97,7 +98,7 @@ export default function RatePlayersTab({ tournamentId, apiFetch }) {
       </div>
 
       {players.length === 0 && (
-        <div className="status-msg">No players in this tournament yet.</div>
+        <div className="empty-state">No players to rate yet.</div>
       )}
 
       {players.length > 0 && current && (

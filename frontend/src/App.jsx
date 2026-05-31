@@ -9,6 +9,7 @@ import ProfileTab from './components/ProfileTab'
 import CreateTeamsTab from './components/CreateTeamsTab'
 import EnterScoreTab from './components/EnterScoreTab'
 import ManageTab, { CreateTournamentForm } from './components/ManageTab'
+import BetsTab from './components/BetsTab'
 
 const API_BASE = import.meta.env.PROD
   ? 'https://football-teams-backend.onrender.com'
@@ -132,6 +133,7 @@ function MainApp({ session, inviteToken }) {
     ? [
         { id: 'standings', label: 'Standings' },
         { id: 'matches',   label: 'Matches' },
+        { id: 'bets',      label: 'Bets' },
         { id: 'rate',      label: 'Rate Players' },
         { id: 'profile',   label: 'Profile' },
         { id: 'teams',     label: 'Create Teams' },
@@ -141,6 +143,7 @@ function MainApp({ session, inviteToken }) {
     : [
         { id: 'standings', label: 'Standings' },
         { id: 'matches',   label: 'Matches' },
+        { id: 'bets',      label: 'Bets' },
         { id: 'rate',      label: 'Rate Players' },
         { id: 'profile',   label: 'Profile' },
       ]
@@ -277,6 +280,14 @@ function MainApp({ session, inviteToken }) {
                 userId={myUserId}
                 onGenerateTeams={goToTeamsWithPlayers}
                 onEnterResult={goToEnterResult}
+              />
+            )}
+            {tab === 'bets' && (
+              <BetsTab
+                tournamentId={selectedTid}
+                apiFetch={apiFetch}
+                userId={myUserId}
+                myRole={myRole}
               />
             )}
             {tab === 'rate' && (

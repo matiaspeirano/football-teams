@@ -99,6 +99,17 @@ class TeamsUpdate(BaseModel):
     team2_players: list[str]
 
 
+class VoteMVP(BaseModel):
+    voted_for_id: str
+
+
+class BetCreate(BaseModel):
+    scheduled_match_id: int
+    predicted_winner: str  # 'team1' or 'team2'
+    stake: float
+    odds_ratio: str  # '1:1', '1:2', '1:3', '2:1'
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -132,6 +143,86 @@ def _require_admin(tournament_id: int, user_id: str) -> None:
     res = supabase.table("tournament_players").select("role").eq("tournament_id", tournament_id).eq("user_id", user_id).execute()
     if not res.data or res.data[0]["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+
+
+def _is_admin(tournament_id: int, user_id: str) -> bool:
+    res = supabase.table("tournament_players").select("role").eq("tournament_id", tournament_id).eq("user_id", user_id).execute()
+    return bool(res.data) and res.data[0]["role"] == "admin"
+
+
+def _compute_creator_winnings(stake: float, odds_ratio: str) -> float:
+    """Amount the acceptor owes the creator when the creator wins (stake × B/A for ratio A:B)."""
+    a, b = odds_ratio.split(":")
+    return float(stake) * int(b) / int(a)
+
+
+def close_expired_mvp_polls() -> None:
+    """Close any MVP polls open for more than 24 hours. Called lazily on relevant reads."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    open_res = supabase.table("matches").select(
+        "id,result,team1_players,team2_players"
+    ).eq("mvp_poll_status", "open").lt("mvp_poll_opened_at", cutoff).execute()
+
+    for match in open_res.data:
+        match_id = match["id"]
+        result = match.get("result")
+
+        if result == "team1":
+            winning_team = match.get("team1_players") or []
+        elif result == "team2":
+            winning_team = match.get("team2_players") or []
+        else:
+            supabase.table("matches").update(
+                {"mvp_poll_status": "closed", "mvp_winners": []}
+            ).eq("id", match_id).execute()
+            continue
+
+        votes_res = supabase.table("mvp_votes").select("voted_for_id").eq("match_id", match_id).execute()
+
+        if not votes_res.data:
+            supabase.table("matches").update(
+                {"mvp_poll_status": "closed", "mvp_winners": []}
+            ).eq("id", match_id).execute()
+            continue
+
+        tally: dict[str, int] = defaultdict(int)
+        for vote in votes_res.data:
+            tally[vote["voted_for_id"]] += 1
+
+        max_votes = max(tally.values())
+        winners = [pid for pid, count in tally.items() if count == max_votes]
+
+        supabase.table("matches").update(
+            {"mvp_poll_status": "closed", "mvp_winners": winners}
+        ).eq("id", match_id).execute()
+
+
+def _settle_bets_for_match(scheduled_match_id: int, match_result: str) -> None:
+    """Settle all open/accepted bets on a scheduled match after the result is recorded."""
+    now = datetime.now(timezone.utc).isoformat()
+    bets_res = supabase.table("bets").select("*").eq("scheduled_match_id", scheduled_match_id).in_("status", ["open", "accepted"]).execute()
+    for bet in bets_res.data:
+        if bet["status"] == "open":
+            supabase.table("bets").update({"status": "void", "outcome": "void", "settled_at": now}).eq("id", bet["id"]).execute()
+            continue
+        # accepted bet
+        if match_result == "draw":
+            supabase.table("bets").update({"status": "void", "outcome": "void", "settled_at": now}).eq("id", bet["id"]).execute()
+            continue
+        creator_won = bet["predicted_winner"] == match_result
+        if creator_won:
+            amount_owed = _compute_creator_winnings(bet["stake"], bet["odds_ratio"])
+            supabase.table("bets").update({
+                "status": "settled", "outcome": "creator_won",
+                "debtor_id": bet["acceptor_id"], "creditor_id": bet["creator_id"],
+                "amount_owed": amount_owed, "settled_at": now,
+            }).eq("id", bet["id"]).execute()
+        else:
+            supabase.table("bets").update({
+                "status": "settled", "outcome": "acceptor_won",
+                "debtor_id": bet["creator_id"], "creditor_id": bet["acceptor_id"],
+                "amount_owed": float(bet["stake"]), "settled_at": now,
+            }).eq("id", bet["id"]).execute()
 
 
 # ---------------------------------------------------------------------------
@@ -372,13 +463,18 @@ def get_matches(tournament_id: int, user_id: str = Depends(get_required_user)):
 @app.post("/api/tournaments/{tournament_id}/matches", status_code=201)
 def create_match(tournament_id: int, body: MatchCreate, user_id: str = Depends(get_required_user)):
     _require_admin(tournament_id, user_id)
+    now = datetime.now(timezone.utc).isoformat()
+    is_draw = body.result == "draw"
     res = supabase.table("matches").insert({
         "tournament_id": tournament_id,
         "played_at": body.played_at,
         "team1_players": body.team1_players,
         "team2_players": body.team2_players,
         "result": body.result,
-        "mvp": body.mvp,
+        "mvp": None,
+        "mvp_poll_status": "closed" if is_draw else "open",
+        "mvp_poll_opened_at": None if is_draw else now,
+        "mvp_winners": [],
     }).execute()
     match = res.data[0]
     if body.scheduled_match_id:
@@ -386,7 +482,111 @@ def create_match(tournament_id: int, body: MatchCreate, user_id: str = Depends(g
             "result_match_id": match["id"],
             "status": "played",
         }).eq("id", body.scheduled_match_id).execute()
+        _settle_bets_for_match(body.scheduled_match_id, body.result)
     return match
+
+
+# ---------------------------------------------------------------------------
+# MVP POLL
+# ---------------------------------------------------------------------------
+
+@app.post("/api/matches/{match_id}/vote-mvp")
+def vote_mvp(match_id: int, body: VoteMVP, user_id: str = Depends(get_required_user)):
+    match_res = supabase.table("matches").select(
+        "tournament_id,result,team1_players,team2_players,mvp_poll_status"
+    ).eq("id", match_id).execute()
+    if not match_res.data:
+        raise HTTPException(status_code=404, detail="Match not found")
+    match = match_res.data[0]
+
+    if match["mvp_poll_status"] != "open":
+        raise HTTPException(status_code=400, detail="MVP poll is not open")
+
+    result = match["result"]
+    if result == "team1":
+        winning_players = match.get("team1_players") or []
+    elif result == "team2":
+        winning_players = match.get("team2_players") or []
+    else:
+        raise HTTPException(status_code=400, detail="No MVP poll for draws")
+
+    if body.voted_for_id not in winning_players:
+        raise HTTPException(status_code=400, detail="voted_for_id must be a player on the winning team")
+
+    supabase.table("mvp_votes").upsert(
+        {"match_id": match_id, "voter_id": user_id, "voted_for_id": body.voted_for_id},
+        on_conflict="match_id,voter_id",
+    ).execute()
+    return {"ok": True}
+
+
+@app.get("/api/matches/{match_id}/mvp-poll")
+def get_mvp_poll(match_id: int, user_id: str = Depends(get_required_user)):
+    close_expired_mvp_polls()
+
+    match_res = supabase.table("matches").select(
+        "tournament_id,result,team1_players,team2_players,mvp_poll_status,mvp_poll_opened_at,mvp_winners"
+    ).eq("id", match_id).execute()
+    if not match_res.data:
+        raise HTTPException(status_code=404, detail="Match not found")
+    match = match_res.data[0]
+
+    result = match["result"]
+    if result == "team1":
+        winning_players = match.get("team1_players") or []
+    elif result == "team2":
+        winning_players = match.get("team2_players") or []
+    else:
+        winning_players = []
+
+    votes_res = supabase.table("mvp_votes").select("voted_for_id,voter_id").eq("match_id", match_id).execute()
+    tally: dict[str, int] = defaultdict(int)
+    my_vote = None
+    for v in votes_res.data:
+        tally[v["voted_for_id"]] += 1
+        if v["voter_id"] == user_id:
+            my_vote = v["voted_for_id"]
+
+    all_ids: set[str] = set(winning_players) | set(tally.keys())
+    all_ids.update(match.get("mvp_winners") or [])
+    names = _display_names(list(all_ids)) if all_ids else {}
+
+    time_remaining_seconds = None
+    closes_at_iso = None
+    opened_at_raw = match.get("mvp_poll_opened_at")
+    if match["mvp_poll_status"] == "open" and opened_at_raw:
+        try:
+            # parse_date handles all ISO variants; fromisoformat is too strict on Python <3.11
+            opened = parse_date(opened_at_raw)
+            # If stored without timezone info (naive), assume UTC
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            closes_at = opened + timedelta(hours=24)
+            closes_at_iso = closes_at.isoformat()
+            remaining = (closes_at - datetime.now(timezone.utc)).total_seconds()
+            time_remaining_seconds = max(0.0, remaining)
+        except Exception:
+            pass
+
+    candidates = [
+        {"user_id": pid, "display_name": names.get(pid), "vote_count": tally.get(pid, 0)}
+        for pid in winning_players
+    ]
+    candidates.sort(key=lambda x: x["vote_count"], reverse=True)
+
+    winners = match.get("mvp_winners") or []
+    return {
+        "match_id": match_id,
+        "poll_status": match["mvp_poll_status"],
+        "opened_at": opened_at_raw,
+        "closes_at": closes_at_iso,
+        "time_remaining_seconds": time_remaining_seconds,
+        "candidates": candidates,
+        "my_vote": my_vote,
+        "my_vote_name": names.get(my_vote) if my_vote else None,
+        "winners": winners,
+        "winner_names": [names.get(w) for w in winners],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +595,8 @@ def create_match(tournament_id: int, body: MatchCreate, user_id: str = Depends(g
 
 @app.get("/api/tournaments/{tournament_id}/standings")
 def get_standings(tournament_id: int, user_id: str = Depends(get_required_user)):
+    close_expired_mvp_polls()
+
     matches_res = supabase.table("matches").select("*").eq("tournament_id", tournament_id).execute()
     matches = matches_res.data
     total_matches = len(matches)
@@ -406,7 +608,7 @@ def get_standings(tournament_id: int, user_id: str = Depends(get_required_user))
 
     for match in matches:
         result = match["result"]
-        mvp = match.get("mvp")
+        mvp_winners = match.get("mvp_winners") or []
 
         for pid in match.get("team1_players", []):
             s = stats[pid]
@@ -417,7 +619,7 @@ def get_standings(tournament_id: int, user_id: str = Depends(get_required_user))
                 s["draws"] += 1; s["match_points"] += sc.POINTS_DRAW
             else:
                 s["losses"] += 1; s["match_points"] += sc.POINTS_LOSS
-            if mvp == pid:
+            if pid in mvp_winners:
                 s["mvp_count"] += 1
 
         for pid in match.get("team2_players", []):
@@ -429,7 +631,7 @@ def get_standings(tournament_id: int, user_id: str = Depends(get_required_user))
                 s["draws"] += 1; s["match_points"] += sc.POINTS_DRAW
             else:
                 s["losses"] += 1; s["match_points"] += sc.POINTS_LOSS
-            if mvp == pid:
+            if pid in mvp_winners:
                 s["mvp_count"] += 1
 
     all_pids = list(stats.keys())
@@ -437,9 +639,8 @@ def get_standings(tournament_id: int, user_id: str = Depends(get_required_user))
 
     rows = []
     for pid, s in stats.items():
-        presence = s["matches_played"] * sc.PRESENCE_PER_MATCH
         eff = sc.effectivity(s["match_points"], s["matches_played"])
-        score = sc.total_score(s["match_points"], s["matches_played"], s["mvp_count"], presence)
+        score = sc.total_score(s["match_points"], s["matches_played"], s["mvp_count"])
         presence_pct = round(s["matches_played"] / total_matches * 100, 1) if total_matches > 0 else 0.0
         rows.append({
             "user_id": pid,
@@ -541,6 +742,7 @@ def create_invite(tournament_id: int, body: InviteCreate, user_id: str = Depends
 
 @app.get("/api/tournaments/{tournament_id}/scheduled-matches")
 def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_required_user)):
+    close_expired_mvp_polls()
     matches_res = supabase.table("scheduled_matches").select("*").eq("tournament_id", tournament_id).order("scheduled_at").execute()
     matches = matches_res.data
     if not matches:
@@ -564,11 +766,15 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
     result_match_ids = [m["result_match_id"] for m in matches if m.get("result_match_id")]
     results_by_id: dict[int, dict] = {}
     if result_match_ids:
-        res_matches = supabase.table("matches").select("id,result,mvp").in_("id", result_match_ids).execute()
+        res_matches = supabase.table("matches").select(
+            "id,result,mvp,mvp_winners,mvp_poll_status,mvp_poll_opened_at"
+        ).in_("id", result_match_ids).execute()
         for rm in res_matches.data:
             results_by_id[rm["id"]] = rm
             if rm.get("mvp"):
                 all_uids.add(rm["mvp"])
+            for wid in (rm.get("mvp_winners") or []):
+                all_uids.add(wid)
 
     names = _display_names(list(all_uids))
 
@@ -597,6 +803,10 @@ def get_scheduled_matches(tournament_id: int, user_id: str = Depends(get_require
             "result_match_id": rm_id,
             "result": rm["result"] if rm else None,
             "mvp_display_name": names.get(rm["mvp"]) if rm and rm.get("mvp") else None,
+            "mvp_poll_status": rm["mvp_poll_status"] if rm else None,
+            "mvp_poll_opened_at": rm.get("mvp_poll_opened_at") if rm else None,
+            "mvp_winners": rm.get("mvp_winners") or [] if rm else [],
+            "mvp_winner_names": [names.get(w) for w in (rm.get("mvp_winners") or [])] if rm else [],
         })
     return result
 
@@ -706,3 +916,196 @@ def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user))
 
     supabase.table("invite_links").update({"used": True}).eq("token", body.token).execute()
     return {"tournament_id": invite["tournament_id"]}
+
+
+# ---------------------------------------------------------------------------
+# BETS
+# ---------------------------------------------------------------------------
+
+_BET_STATUS_ORDER = {"open": 0, "accepted": 1, "settled": 2, "void": 4, "cancelled": 5}
+
+
+def _bet_sort_key(bet: dict) -> tuple:
+    status = bet["status"]
+    if status == "settled":
+        return (2 if not bet.get("paid") else 3, bet.get("settled_at") or "")
+    return (_BET_STATUS_ORDER.get(status, 9), bet.get("created_at") or "")
+
+
+@app.get("/api/tournaments/{tournament_id}/bets")
+def get_bets(tournament_id: int, user_id: str = Depends(get_required_user)):
+    bets_res = supabase.table("bets").select("*").eq("tournament_id", tournament_id).execute()
+    bets = bets_res.data
+    if not bets:
+        return []
+
+    all_uids: set[str] = set()
+    match_ids: set[int] = set()
+    for b in bets:
+        for field in ("creator_id", "acceptor_id", "debtor_id", "creditor_id"):
+            if b.get(field):
+                all_uids.add(b[field])
+        if b.get("scheduled_match_id"):
+            match_ids.add(b["scheduled_match_id"])
+
+    names = _display_names(list(all_uids))
+
+    matches_by_id: dict[int, dict] = {}
+    if match_ids:
+        sm_res = supabase.table("scheduled_matches").select("id,scheduled_at,location,team1_players,team2_players").in_("id", list(match_ids)).execute()
+        for m in sm_res.data:
+            matches_by_id[m["id"]] = m
+
+    result = []
+    for b in bets:
+        sm = matches_by_id.get(b.get("scheduled_match_id"))
+        result.append({
+            "id": b["id"],
+            "tournament_id": b["tournament_id"],
+            "scheduled_match_id": b.get("scheduled_match_id"),
+            "match_scheduled_at": sm["scheduled_at"] if sm else None,
+            "match_location": sm.get("location") if sm else None,
+            "creator_id": b["creator_id"],
+            "creator_name": names.get(b["creator_id"]),
+            "acceptor_id": b.get("acceptor_id"),
+            "acceptor_name": names.get(b["acceptor_id"]) if b.get("acceptor_id") else None,
+            "predicted_winner": b["predicted_winner"],
+            "stake": float(b["stake"]),
+            "odds_ratio": b["odds_ratio"],
+            "status": b["status"],
+            "outcome": b.get("outcome"),
+            "amount_owed": float(b["amount_owed"]) if b.get("amount_owed") is not None else None,
+            "debtor_id": b.get("debtor_id"),
+            "debtor_name": names.get(b["debtor_id"]) if b.get("debtor_id") else None,
+            "creditor_id": b.get("creditor_id"),
+            "creditor_name": names.get(b["creditor_id"]) if b.get("creditor_id") else None,
+            "paid": bool(b.get("paid")),
+            "created_at": b.get("created_at"),
+            "settled_at": b.get("settled_at"),
+        })
+
+    result.sort(key=_bet_sort_key)
+    return result
+
+
+@app.post("/api/tournaments/{tournament_id}/bets", status_code=201)
+def create_bet(tournament_id: int, body: BetCreate, user_id: str = Depends(get_required_user)):
+    if body.predicted_winner not in ("team1", "team2"):
+        raise HTTPException(status_code=400, detail="predicted_winner must be 'team1' or 'team2'")
+    if body.odds_ratio not in ("1:1", "1:2", "1:3", "2:1"):
+        raise HTTPException(status_code=400, detail="odds_ratio must be one of: 1:1, 1:2, 1:3, 2:1")
+    if body.stake <= 0:
+        raise HTTPException(status_code=400, detail="stake must be positive")
+
+    sm_res = supabase.table("scheduled_matches").select("id,tournament_id,status,team1_players,team2_players").eq("id", body.scheduled_match_id).execute()
+    if not sm_res.data:
+        raise HTTPException(status_code=404, detail="Scheduled match not found")
+    sm = sm_res.data[0]
+    if sm["tournament_id"] != tournament_id:
+        raise HTTPException(status_code=400, detail="Match does not belong to this tournament")
+    if sm["status"] == "played":
+        raise HTTPException(status_code=400, detail="Cannot bet on a match that is already played")
+    if not sm.get("team1_players") and not sm.get("team2_players"):
+        raise HTTPException(status_code=400, detail="Match must have saved teams before bets can be placed")
+
+    res = supabase.table("bets").insert({
+        "tournament_id": tournament_id,
+        "scheduled_match_id": body.scheduled_match_id,
+        "creator_id": user_id,
+        "predicted_winner": body.predicted_winner,
+        "stake": body.stake,
+        "odds_ratio": body.odds_ratio,
+        "status": "open",
+    }).execute()
+    return res.data[0]
+
+
+@app.post("/api/bets/{bet_id}/accept")
+def accept_bet(bet_id: int, user_id: str = Depends(get_required_user)):
+    bet_res = supabase.table("bets").select("*").eq("id", bet_id).execute()
+    if not bet_res.data:
+        raise HTTPException(status_code=404, detail="Bet not found")
+    bet = bet_res.data[0]
+    if bet["creator_id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot accept your own bet")
+    if bet["status"] != "open":
+        raise HTTPException(status_code=400, detail="Bet is not open for acceptance")
+
+    supabase.table("bets").update({"acceptor_id": user_id, "status": "accepted"}).eq("id", bet_id).execute()
+    return {"status": "accepted"}
+
+
+@app.post("/api/bets/{bet_id}/cancel")
+def cancel_bet(bet_id: int, user_id: str = Depends(get_required_user)):
+    bet_res = supabase.table("bets").select("*").eq("id", bet_id).execute()
+    if not bet_res.data:
+        raise HTTPException(status_code=404, detail="Bet not found")
+    bet = bet_res.data[0]
+    if bet["creator_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Only the bet creator can cancel it")
+    if bet["status"] != "open":
+        raise HTTPException(status_code=400, detail="Only open bets can be cancelled")
+
+    supabase.table("bets").update({"status": "cancelled"}).eq("id", bet_id).execute()
+    return {"status": "cancelled"}
+
+
+@app.post("/api/bets/{bet_id}/mark-paid")
+def mark_bet_paid(bet_id: int, user_id: str = Depends(get_required_user)):
+    bet_res = supabase.table("bets").select("*").eq("id", bet_id).execute()
+    if not bet_res.data:
+        raise HTTPException(status_code=404, detail="Bet not found")
+    bet = bet_res.data[0]
+    if bet["status"] != "settled":
+        raise HTTPException(status_code=400, detail="Only settled bets can be marked as paid")
+    if bet.get("paid"):
+        raise HTTPException(status_code=400, detail="Bet is already marked as paid")
+    is_creditor = bet.get("creditor_id") == user_id
+    is_admin = _is_admin(bet["tournament_id"], user_id)
+    if not is_creditor and not is_admin:
+        raise HTTPException(status_code=403, detail="Only the creditor or a tournament admin can mark this as paid")
+
+    supabase.table("bets").update({"paid": True}).eq("id", bet_id).execute()
+    return {"paid": True}
+
+
+@app.get("/api/tournaments/{tournament_id}/settle-up")
+def settle_up(tournament_id: int, user_id: str = Depends(get_required_user)):
+    bets_res = supabase.table("bets").select("debtor_id,creditor_id,amount_owed").eq("tournament_id", tournament_id).eq("status", "settled").eq("paid", False).execute()
+    bets = bets_res.data
+
+    raw: dict[tuple, float] = defaultdict(float)
+    all_uids: set[str] = set()
+    for b in bets:
+        d, c, amt = b.get("debtor_id"), b.get("creditor_id"), b.get("amount_owed")
+        if d and c and amt:
+            raw[(d, c)] += float(amt)
+            all_uids.add(d)
+            all_uids.add(c)
+
+    names = _display_names(list(all_uids))
+
+    result = []
+    processed: set[tuple] = set()
+    for (a, b_id), amount in raw.items():
+        if (a, b_id) in processed:
+            continue
+        reverse = raw.get((b_id, a), 0.0)
+        net = amount - reverse
+        if net > 0.005:
+            result.append({
+                "debtor_id": a, "creditor_id": b_id,
+                "debtor_name": names.get(a, a), "creditor_name": names.get(b_id, b_id),
+                "net_amount": round(net, 2),
+            })
+        elif net < -0.005:
+            result.append({
+                "debtor_id": b_id, "creditor_id": a,
+                "debtor_name": names.get(b_id, b_id), "creditor_name": names.get(a, a),
+                "net_amount": round(-net, 2),
+            })
+        processed.add((a, b_id))
+        processed.add((b_id, a))
+
+    result.sort(key=lambda x: x["net_amount"], reverse=True)
+    return result

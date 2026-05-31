@@ -1433,3 +1433,352 @@ h1 {
   margin-top: 4px;
 }
 
+/* ── Empty states ───────────────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 24px 16px;
+  font-size: 0.87rem;
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.empty-state-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* ── Bets tab ───────────────────────────────────────────────── */
+.bets-disclaimer {
+  background: var(--surface);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 20px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.bets-section-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.bets-settle-up {
+  background: var(--surface);
+  border: 1.5px solid var(--green-mid);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 20px;
+}
+
+.settle-up-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+  color: var(--text);
+  gap: 8px;
+}
+
+.settle-up-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settle-up-amount {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.bet-card {
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  transition: opacity 0.15s;
+}
+
+.bet-card-dim {
+  opacity: 0.5;
+}
+
+.bet-card-paid {
+  opacity: 0.65;
+}
+
+.bet-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 7px;
+}
+
+.bet-match-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.bet-status-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.bet-terms-row {
+  font-size: 0.88rem;
+  color: var(--text);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.bet-secondary-row {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.bet-odds {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.bet-payout-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 5px 0 2px;
+}
+
+.bet-owed-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 6px 0 2px;
+  font-size: 0.88rem;
+  color: var(--text);
+  background: rgba(251, 191, 36, 0.07);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  gap: 8px;
+}
+
+.bet-owed-paid {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+.bet-owed-amount {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #fbbf24;
+  flex-shrink: 0;
+}
+
+.bet-owed-paid .bet-owed-amount {
+  color: var(--text-muted);
+}
+
+.bet-void-msg {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 5px 0 2px;
+}
+
+.bet-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.bet-team-preview {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: start;
+  background: var(--surface2);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.bet-team-preview-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+
+.bet-team-preview-player {
+  font-size: 0.78rem;
+  color: var(--text);
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bet-team-preview-vs {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  align-self: center;
+}
+
+.bet-odds-preview {
+  background: rgba(74, 222, 128, 0.06);
+  border: 1px solid rgba(74, 222, 128, 0.15);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+/* ── MVP poll ───────────────────────────────────────────────── */
+.mvp-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.mvp-result-trophy {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.mvp-no-poll {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mvp-poll-loading {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.mvp-poll {
+  margin-top: 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.mvp-poll-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.mvp-poll-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--green);
+}
+
+.mvp-poll-countdown {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.mvp-poll-ticker {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-align: right;
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mvp-poll-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.mvp-candidate-btn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: var(--surface3);
+  border: 1.5px solid var(--border-mid);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+  -webkit-tap-highlight-color: transparent;
+  text-align: left;
+}
+
+.mvp-candidate-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mvp-candidate-btn:not(:disabled):active {
+  background: var(--surface2);
+}
+
+.mvp-candidate-btn.mvp-candidate-voted {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: #d1fae5;
+}
+
+.mvp-candidate-name {
+  font-weight: 500;
+}
+
+.mvp-candidate-votes {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-radius: 20px;
+  padding: 1px 8px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.mvp-candidate-voted .mvp-candidate-votes {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--green);
+}
+
