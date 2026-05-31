@@ -59,6 +59,8 @@ class GenerateTeamsRequest(BaseModel):
 
 class InviteCreate(BaseModel):
     role: str
+    max_uses: int | None = None
+    expires_in: str = "1w"  # '1d', '3d', '1w', 'never'
 
 
 class InviteAccept(BaseModel):
@@ -715,25 +717,52 @@ def generate_teams(tournament_id: int, body: GenerateTeamsRequest, user_id: str 
 @app.get("/api/tournaments/{tournament_id}/invites")
 def list_invites(tournament_id: int, user_id: str = Depends(get_required_user)):
     _require_admin(tournament_id, user_id)
-    now = datetime.now(timezone.utc).isoformat()
-    res = supabase.table("invite_links").select("token,role,expires_at,created_by").eq("tournament_id", tournament_id).gt("expires_at", now).execute()
-    return res.data
+    now = datetime.now(timezone.utc)
+    res = supabase.table("invite_links").select("token,role,expires_at,max_uses,use_count").eq("tournament_id", tournament_id).execute()
+    active = []
+    for inv in res.data:
+        if inv["expires_at"] is not None:
+            exp = parse_date(inv["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < now:
+                continue
+        if inv["max_uses"] is not None and inv["use_count"] >= inv["max_uses"]:
+            continue
+        active.append({**inv, "invite_path": f"/invite/{inv['token']}"})
+    return active
 
 
 @app.post("/api/tournaments/{tournament_id}/invite", status_code=201)
 def create_invite(tournament_id: int, body: InviteCreate, user_id: str = Depends(get_required_user)):
     _require_admin(tournament_id, user_id)
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    _EXPIRY_DELTAS = {"1d": timedelta(days=1), "3d": timedelta(days=3), "1w": timedelta(days=7)}
+    if body.expires_in == "never":
+        expires_at = None
+    else:
+        delta = _EXPIRY_DELTAS.get(body.expires_in, timedelta(days=7))
+        expires_at = (datetime.now(timezone.utc) + delta).isoformat()
     supabase.table("invite_links").insert({
         "tournament_id": tournament_id,
         "role": body.role,
         "created_by": user_id,
         "token": token,
         "expires_at": expires_at,
-        "used": False,
+        "max_uses": body.max_uses,
+        "use_count": 0,
     }).execute()
     return {"invite_url": f"/invite/{token}"}
+
+
+@app.delete("/api/invites/{token}", status_code=200)
+def deactivate_invite(token: str, user_id: str = Depends(get_required_user)):
+    res = supabase.table("invite_links").select("tournament_id").eq("token", token).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    _require_admin(res.data[0]["tournament_id"], user_id)
+    supabase.table("invite_links").update({"expires_at": datetime.now(timezone.utc).isoformat()}).eq("token", token).execute()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -901,11 +930,15 @@ def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user))
 
     invite = res.data[0]
 
-    expires_at = parse_date(invite["expires_at"])
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail="Invite expired")
+    if invite["expires_at"] is not None:
+        expires_at = parse_date(invite["expires_at"])
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="This invite link has expired or is invalid.")
+
+    if invite["max_uses"] is not None and invite["use_count"] >= invite["max_uses"]:
+        raise HTTPException(status_code=400, detail="This invite link has reached its usage limit.")
 
     existing = supabase.table("tournament_players").select("user_id").eq("tournament_id", invite["tournament_id"]).eq("user_id", user_id).execute()
     if not existing.data:
@@ -914,6 +947,7 @@ def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user))
             "user_id": user_id,
             "role": invite["role"],
         }).execute()
+        supabase.table("invite_links").update({"use_count": invite["use_count"] + 1}).eq("token", body.token).execute()
 
     return {"tournament_id": invite["tournament_id"]}
 

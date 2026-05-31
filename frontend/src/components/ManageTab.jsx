@@ -119,6 +119,9 @@ export default function ManageTab({
 
   // ── Invite state ────────────────────────────────────────────────────────
   const [inviteRole, setInviteRole] = useState('player')
+  const [inviteExpiresIn, setInviteExpiresIn] = useState('1w')
+  const [inviteMaxUsesMode, setInviteMaxUsesMode] = useState('unlimited')
+  const [inviteMaxUsesN, setInviteMaxUsesN] = useState(10)
   const [inviteLink, setInviteLink] = useState(null)
   const [inviteLoading, setInviteLoading] = useState(false)
   const [inviteError, setInviteError] = useState(null)
@@ -128,6 +131,7 @@ export default function ManageTab({
   const [pendingLoading, setPendingLoading] = useState(false)
   const [pendingError, setPendingError] = useState(null)
   const [copiedToken, setCopiedToken] = useState(null)
+  const [deactivating, setDeactivating] = useState(null)
 
   const loadPendingInvites = () => {
     setPendingLoading(true)
@@ -147,7 +151,11 @@ export default function ManageTab({
     try {
       const res = await apiFetch(`/api/tournaments/${tournamentId}/invite`, {
         method: 'POST',
-        body: JSON.stringify({ role: inviteRole }),
+        body: JSON.stringify({
+          role: inviteRole,
+          expires_in: inviteExpiresIn,
+          max_uses: inviteMaxUsesMode === 'limited' ? Number(inviteMaxUsesN) : null,
+        }),
       })
       if (!res.ok) throw new Error('Failed to generate invite link')
       const data = await res.json()
@@ -173,8 +181,19 @@ export default function ManageTab({
     })
   }
 
+  const deactivateInvite = async (token) => {
+    if (!window.confirm('Deactivate this link? People who already joined stay in the tournament.')) return
+    setDeactivating(token)
+    try {
+      await apiFetch(`/api/invites/${token}`, { method: 'DELETE' })
+      loadPendingInvites()
+    } finally {
+      setDeactivating(null)
+    }
+  }
+
   const formatExpiry = (iso) =>
-    new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'never'
 
   // ── Player management state ─────────────────────────────────────────────
   const [playerSearch, setPlayerSearch] = useState('')
@@ -446,6 +465,30 @@ export default function ManageTab({
               <option value="admin">Admin</option>
             </select>
           </div>
+          <div className="form-field">
+            <label>Expiry</label>
+            <select value={inviteExpiresIn} onChange={e => setInviteExpiresIn(e.target.value)}>
+              <option value="1d">1 day</option>
+              <option value="3d">3 days</option>
+              <option value="1w">1 week</option>
+              <option value="never">Never</option>
+            </select>
+          </div>
+          <div className="form-field">
+            <label>Usage limit</label>
+            <select value={inviteMaxUsesMode} onChange={e => setInviteMaxUsesMode(e.target.value)}>
+              <option value="unlimited">Unlimited</option>
+              <option value="limited">Limited to N uses</option>
+            </select>
+          </div>
+          {inviteMaxUsesMode === 'limited' && (
+            <div className="form-field">
+              <label>Max uses</label>
+              <input type="number" min={1} value={inviteMaxUsesN}
+                onChange={e => setInviteMaxUsesN(e.target.value)}
+                style={{ width: 80 }} />
+            </div>
+          )}
           <button className="add-btn" onClick={generateInvite} disabled={inviteLoading}
             style={{ width: '100%', padding: 10 }}>
             {inviteLoading ? 'Generating…' : 'Generate Invite Link'}
@@ -468,7 +511,7 @@ export default function ManageTab({
           )}
         </div>
 
-        {/* Pending */}
+        {/* Active links */}
         <div className="constraint-section">
           <h3>Active Invite Links</h3>
           {pendingLoading && <div style={{ color: 'var(--text-dim)', fontSize: '0.87rem', paddingTop: 8 }}>Loading…</div>}
@@ -478,27 +521,44 @@ export default function ManageTab({
           )}
           {pendingInvites.map((inv, i) => (
             <div key={inv.token} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '9px 0',
+              padding: '10px 0',
               borderBottom: i < pendingInvites.length - 1 ? '1px solid var(--border)' : 'none',
             }}>
-              <div>
-                <span style={{
-                  fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase',
-                  letterSpacing: '0.06em',
-                  color: inv.role === 'admin' ? 'var(--green)' : 'var(--text-muted)',
-                  marginRight: 8,
-                }}>
-                  {inv.role}
-                </span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                  expires {formatExpiry(inv.expires_at)}
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <span style={{
+                    fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                    color: inv.role === 'admin' ? 'var(--green)' : 'var(--text-muted)',
+                    marginRight: 8,
+                  }}>
+                    {inv.role}
+                  </span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                    {inv.expires_at ? `expires ${formatExpiry(inv.expires_at)}` : 'never expires'}
+                  </span>
+                  <div style={{ fontSize: '0.73rem', color: 'var(--text-dim)', marginTop: 3 }}>
+                    {inv.max_uses == null
+                      ? `${inv.use_count} used`
+                      : `${inv.use_count} / ${inv.max_uses} used`}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button className="add-btn" onClick={() => copyInviteUrl(inv.token)}
+                    style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
+                    {copiedToken === inv.token ? '✓ Copied!' : 'Copy'}
+                  </button>
+                  <button onClick={() => deactivateInvite(inv.token)}
+                    disabled={deactivating === inv.token}
+                    style={{
+                      padding: '4px 10px', fontSize: '0.75rem', cursor: 'pointer',
+                      background: 'transparent', border: '1px solid var(--border-mid)',
+                      borderRadius: 'var(--radius-sm)', color: 'var(--text-dim)',
+                    }}>
+                    {deactivating === inv.token ? '…' : 'Deactivate'}
+                  </button>
+                </div>
               </div>
-              <button className="add-btn" onClick={() => copyInviteUrl(inv.token)}
-                style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
-                {copiedToken === inv.token ? '✓ Copied!' : 'Copy'}
-              </button>
             </div>
           ))}
         </div>
