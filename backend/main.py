@@ -716,7 +716,7 @@ def generate_teams(tournament_id: int, body: GenerateTeamsRequest, user_id: str 
 def list_invites(tournament_id: int, user_id: str = Depends(get_required_user)):
     _require_admin(tournament_id, user_id)
     now = datetime.now(timezone.utc).isoformat()
-    res = supabase.table("invite_links").select("token,role,expires_at,created_by").eq("tournament_id", tournament_id).eq("used", False).gt("expires_at", now).execute()
+    res = supabase.table("invite_links").select("token,role,expires_at,created_by").eq("tournament_id", tournament_id).gt("expires_at", now).execute()
     return res.data
 
 
@@ -900,8 +900,6 @@ def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user))
         raise HTTPException(status_code=404, detail="Invalid invite token")
 
     invite = res.data[0]
-    if invite.get("used"):
-        raise HTTPException(status_code=400, detail="Invite already used")
 
     if parse_date(invite["expires_at"]) < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invite expired")
@@ -914,7 +912,6 @@ def accept_invite(body: InviteAccept, user_id: str = Depends(get_required_user))
             "role": invite["role"],
         }).execute()
 
-    supabase.table("invite_links").update({"used": True}).eq("token", body.token).execute()
     return {"tournament_id": invite["tournament_id"]}
 
 

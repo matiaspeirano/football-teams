@@ -438,7 +438,7 @@ export default function ManageTab({
 
         {/* Generate */}
         <div className="constraint-section" style={{ marginBottom: 16 }}>
-          <h3>Generate Invite Link</h3>
+          <h3>Generate Shareable Invite Link</h3>
           <div className="form-field" style={{ marginTop: 10 }}>
             <label>Role</label>
             <select value={inviteRole} onChange={e => setInviteRole(e.target.value)}>
@@ -470,11 +470,11 @@ export default function ManageTab({
 
         {/* Pending */}
         <div className="constraint-section">
-          <h3>Pending Invites</h3>
+          <h3>Active Invite Links</h3>
           {pendingLoading && <div style={{ color: 'var(--text-dim)', fontSize: '0.87rem', paddingTop: 8 }}>Loading…</div>}
           {pendingError && <div className="error">{pendingError}</div>}
           {!pendingLoading && !pendingError && pendingInvites.length === 0 && (
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.87rem', paddingTop: 8 }}>No active invites.</div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.87rem', paddingTop: 8 }}>No active invite links.</div>
           )}
           {pendingInvites.map((inv, i) => (
             <div key={inv.token} style={{

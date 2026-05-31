@@ -114,7 +114,7 @@ function MainApp({ session, inviteToken }) {
     }).then(async r => {
       if (!r.ok) {
         const e = await r.json()
-        setInviteErrMsg(e.detail || 'Failed to accept invite')
+        setInviteErrMsg(e.detail || 'This invite link has expired or is invalid.')
         setInviteNote('error')
         return
       }
@@ -126,7 +126,7 @@ function MainApp({ session, inviteToken }) {
         setTournaments(ts)
         if (data.tournament_id) setSelectedTid(data.tournament_id)
       }).catch(() => {})
-    }).catch(() => { setInviteErrMsg('Failed to accept invite'); setInviteNote('error') })
+    }).catch(() => { setInviteErrMsg('This invite link has expired or is invalid.'); setInviteNote('error') })
   }, [inviteToken, apiFetch])
 
   const tabs = myRole === 'admin'
