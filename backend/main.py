@@ -55,6 +55,12 @@ class GenerateTeamsRequest(BaseModel):
     selected_player_ids: list[str]
     must_together: list[list[str]] = []
     must_separate: list[list[str]] = []
+    temp_players: list[dict] = []
+
+
+class GuestCreate(BaseModel):
+    name: str
+    score: float = 3.0
 
 
 class InviteCreate(BaseModel):
@@ -138,7 +144,15 @@ def _display_names(user_ids: list[str]) -> dict[str, Optional[str]]:
     if not user_ids:
         return {}
     res = supabase.table("profiles").select("id,display_name").in_("id", user_ids).execute()
-    return {p["id"]: p.get("display_name") for p in res.data}
+    names = {p["id"]: p.get("display_name") for p in res.data}
+
+    missing_ids = [uid for uid in user_ids if uid not in names]
+    if missing_ids:
+        guests_res = supabase.table("guest_players").select("id,name").in_("id", missing_ids).execute()
+        for g in guests_res.data:
+            names[g["id"]] = g.get("name")
+
+    return names
 
 
 def _require_admin(tournament_id: int, user_id: str) -> None:
@@ -424,6 +438,33 @@ def remove_player(tournament_id: int, player_id: str, current_user_id: str = Dep
 
 
 # ---------------------------------------------------------------------------
+# GUEST PLAYERS
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tournaments/{tournament_id}/guests")
+def list_guests(tournament_id: int, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    res = supabase.table("guest_players").select("id,name").eq("tournament_id", tournament_id).order("name").execute()
+    return res.data
+
+
+@app.post("/api/tournaments/{tournament_id}/guests", status_code=201)
+def create_guest(tournament_id: int, body: GuestCreate, user_id: str = Depends(get_required_user)):
+    _require_admin(tournament_id, user_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name must not be empty")
+    res = supabase.table("guest_players").insert({
+        "tournament_id": tournament_id,
+        "name": name,
+        "score": body.score,
+        "created_by": user_id,
+    }).execute()
+    row = res.data[0]
+    return {"id": row["id"], "name": row["name"]}
+
+
+# ---------------------------------------------------------------------------
 # RATINGS
 # ---------------------------------------------------------------------------
 
@@ -467,16 +508,30 @@ def create_match(tournament_id: int, body: MatchCreate, user_id: str = Depends(g
     _require_admin(tournament_id, user_id)
     now = datetime.now(timezone.utc).isoformat()
     is_draw = body.result == "draw"
+    manual_mvp = body.mvp if (not is_draw and body.mvp) else None
+
+    if manual_mvp:
+        winning_team = body.team1_players if body.result == "team1" else body.team2_players
+        if manual_mvp not in winning_team:
+            raise HTTPException(status_code=400, detail="mvp must be a player on the winning team")
+
+    if is_draw:
+        mvp, mvp_poll_status, mvp_poll_opened_at, mvp_winners = None, "closed", None, []
+    elif manual_mvp:
+        mvp, mvp_poll_status, mvp_poll_opened_at, mvp_winners = manual_mvp, "closed", None, [manual_mvp]
+    else:
+        mvp, mvp_poll_status, mvp_poll_opened_at, mvp_winners = None, "open", now, []
+
     res = supabase.table("matches").insert({
         "tournament_id": tournament_id,
         "played_at": body.played_at,
         "team1_players": body.team1_players,
         "team2_players": body.team2_players,
         "result": body.result,
-        "mvp": None,
-        "mvp_poll_status": "closed" if is_draw else "open",
-        "mvp_poll_opened_at": None if is_draw else now,
-        "mvp_winners": [],
+        "mvp": mvp,
+        "mvp_poll_status": mvp_poll_status,
+        "mvp_poll_opened_at": mvp_poll_opened_at,
+        "mvp_winners": mvp_winners,
     }).execute()
     match = res.data[0]
     if body.scheduled_match_id:
@@ -671,10 +726,11 @@ def generate_teams(tournament_id: int, body: GenerateTeamsRequest, user_id: str 
     _require_admin(tournament_id, user_id)
 
     expected = body.num_players_per_team * 2
-    if len(body.selected_player_ids) != expected:
+    total = len(body.selected_player_ids) + len(body.temp_players)
+    if total != expected:
         raise HTTPException(
             status_code=400,
-            detail=f"Expected {expected} selected players, got {len(body.selected_player_ids)}",
+            detail=f"Expected {expected} selected players, got {total}",
         )
 
     ratings_map = _averaged_ratings(tournament_id)
@@ -693,6 +749,16 @@ def generate_teams(tournament_id: int, body: GenerateTeamsRequest, user_id: str 
             "avg_play":  round(avg_play,  2),
             "avg_run":   round(avg_run,   2),
             "avg_goals": round(avg_goals, 2),
+        })
+
+    for i, tp in enumerate(body.temp_players):
+        players.append({
+            "id": f"temp-{i}",
+            "display_name": tp["name"],
+            "score": float(tp["score"]),
+            "avg_play": 0,
+            "avg_run": 0,
+            "avg_goals": 0,
         })
 
     try:

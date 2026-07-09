@@ -10,8 +10,43 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
   const [team1, setTeam1] = useState(new Set())
   const [team2, setTeam2] = useState(new Set())
   const [result, setResult] = useState('')
+  const [mvp, setMvp] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  const [guests, setGuests] = useState([])
+  const [guestName, setGuestName] = useState('')
+  const [guestLoading, setGuestLoading] = useState(false)
+  const [guestError, setGuestError] = useState(null)
+
+  useEffect(() => {
+    apiFetch(`/api/tournaments/${tournamentId}/guests`)
+      .then(r => r.json())
+      .then(data => setGuests(data.map(g => ({ user_id: g.id, display_name: g.name, is_guest: true }))))
+      .catch(() => {})
+  }, [tournamentId])
+
+  const selectable = [...players, ...guests]
+
+  const addGuest = async () => {
+    const name = guestName.trim()
+    if (!name) return
+    setGuestLoading(true); setGuestError(null)
+    try {
+      const res = await apiFetch(`/api/tournaments/${tournamentId}/guests`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      })
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Server error') }
+      const g = await res.json()
+      setGuests(prev => [...prev, { user_id: g.id, display_name: g.name, is_guest: true }])
+      setGuestName('')
+    } catch (e) {
+      setGuestError(e.message)
+    } finally {
+      setGuestLoading(false)
+    }
+  }
 
   const toggleTeam1 = id => {
     if (!team1.has(id) && team1.size >= numPerTeam) return
@@ -35,6 +70,13 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
 
   const reset = () => { setTeam1(new Set()); setTeam2(new Set()) }
 
+  const chooseResult = val => { setResult(val); setMvp('') }
+
+  const winningPlayers = result === 'team1' ? [...team1] : result === 'team2' ? [...team2] : []
+  const mvpCandidates = winningPlayers
+    .map(id => selectable.find(p => p.user_id === id))
+    .filter(Boolean)
+
   const submit = async () => {
     setLoading(true); setError(null)
     try {
@@ -45,10 +87,11 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
           team1_players: [...team1],
           team2_players: [...team2],
           result,
+          mvp: mvp || null,
         }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Server error') }
-      reset(); setResult(''); setDate(todayStr())
+      reset(); setResult(''); setMvp(''); setDate(todayStr())
       onSuccess()
     } catch (e) {
       setError(e.message)
@@ -73,7 +116,7 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
       <div className="player-cols">
         <div className="player-col">
           <div className="col-label">Team 1 ({team1.size}/{numPerTeam})</div>
-          {players.map(p => {
+          {selectable.map(p => {
             const inT1 = team1.has(p.user_id), inT2 = team2.has(p.user_id)
             const dis = !inT1 && (inT2 || team1.size >= numPerTeam)
             return (
@@ -81,14 +124,14 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
                 className={`check-row${inT1 ? ' checked-t1' : inT2 ? ' in-other' : ''}${dis ? ' check-disabled' : ''}`}>
                 <input type="checkbox" checked={inT1} disabled={dis}
                   onChange={() => toggleTeam1(p.user_id)} />
-                {p.display_name ?? p.user_id}
+                {(p.display_name ?? p.user_id) + (p.is_guest ? ' (guest)' : '')}
               </label>
             )
           })}
         </div>
         <div className="player-col">
           <div className="col-label">Team 2 ({team2.size}/{numPerTeam})</div>
-          {players.map(p => {
+          {selectable.map(p => {
             const inT1 = team1.has(p.user_id), inT2 = team2.has(p.user_id)
             const dis = !inT2 && (inT1 || team2.size >= numPerTeam)
             return (
@@ -96,7 +139,7 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
                 className={`check-row${inT2 ? ' checked-t2' : inT1 ? ' in-other' : ''}${dis ? ' check-disabled' : ''}`}>
                 <input type="checkbox" checked={inT2} disabled={dis}
                   onChange={() => toggleTeam2(p.user_id)} />
-                {p.display_name ?? p.user_id}
+                {(p.display_name ?? p.user_id) + (p.is_guest ? ' (guest)' : '')}
               </label>
             )
           })}
@@ -104,14 +147,41 @@ function ManualForm({ tournamentId, apiFetch, players, onSuccess }) {
       </div>
 
       <div className="form-field">
+        <label>Add guest player</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input type="text" placeholder="Guest name" value={guestName}
+            onChange={e => setGuestName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addGuest() } }} />
+          <button type="button" className="result-btn" onClick={addGuest} disabled={guestLoading || !guestName.trim()}>
+            {guestLoading ? '…' : '+ Add guest'}
+          </button>
+        </div>
+        {guestError && <div className="error">{guestError}</div>}
+      </div>
+
+      <div className="form-field">
         <label>Result</label>
         <div className="result-btns">
           {Object.entries(RESULT_LABELS).map(([val, label]) => (
             <button key={val} className={`result-btn${result === val ? ' active' : ''}`}
-              onClick={() => setResult(val)}>{label}</button>
+              onClick={() => chooseResult(val)}>{label}</button>
           ))}
         </div>
       </div>
+
+      {(result === 'team1' || result === 'team2') && (
+        <div className="form-field">
+          <label>MVP (optional)</label>
+          <select value={mvp} onChange={e => setMvp(e.target.value)}>
+            <option value="">— No MVP (open poll) —</option>
+            {mvpCandidates.map(p => (
+              <option key={p.user_id} value={p.user_id}>
+                {(p.display_name ?? p.user_id) + (p.is_guest ? ' (guest)' : '')}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -128,6 +198,7 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
   const [eligibleMatches, setEligibleMatches] = useState(null)
   const [selectedMatchId, setSelectedMatchId] = useState(initialMatch?.id ?? '')
   const [result, setResult] = useState('')
+  const [mvp, setMvp] = useState('')
   const [loading, setLoading] = useState(false)
   const [fetchError, setFetchError] = useState(null)
   const [error, setError] = useState(null)
@@ -144,6 +215,12 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
 
   const selectedMatch = eligibleMatches?.find(m => m.id === Number(selectedMatchId)) ?? initialMatch ?? null
 
+  const chooseResult = val => { setResult(val); setMvp('') }
+
+  const winningPlayers = result === 'team1' ? (selectedMatch?.team1 ?? [])
+    : result === 'team2' ? (selectedMatch?.team2 ?? [])
+    : []
+
   const submit = async () => {
     if (!selectedMatch || !result) return
     setLoading(true); setError(null)
@@ -156,10 +233,12 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
           team1_players: (selectedMatch.team1 ?? []).map(p => p.user_id),
           team2_players: (selectedMatch.team2 ?? []).map(p => p.user_id),
           result,
+          mvp: mvp || null,
           scheduled_match_id: selectedMatch.id,
         }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Server error') }
+      setMvp('')
       onSuccess()
     } catch (e) {
       setError(e.message)
@@ -185,7 +264,7 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
       {!initialMatch && (
         <div className="form-field">
           <label>Match</label>
-          <select value={selectedMatchId} onChange={e => { setSelectedMatchId(e.target.value); setResult('') }}>
+          <select value={selectedMatchId} onChange={e => { setSelectedMatchId(e.target.value); setResult(''); setMvp('') }}>
             <option value="">Select a match…</option>
             {eligibleMatches.map(m => {
               const d = new Date(m.scheduled_at)
@@ -219,10 +298,22 @@ function FromMatchForm({ tournamentId, apiFetch, players, initialMatch, onSucces
             <div className="result-btns">
               {Object.entries(RESULT_LABELS).map(([val, label]) => (
                 <button key={val} className={`result-btn${result === val ? ' active' : ''}`}
-                  onClick={() => setResult(val)}>{label}</button>
+                  onClick={() => chooseResult(val)}>{label}</button>
               ))}
             </div>
           </div>
+
+          {(result === 'team1' || result === 'team2') && (
+            <div className="form-field">
+              <label>MVP (optional)</label>
+              <select value={mvp} onChange={e => setMvp(e.target.value)}>
+                <option value="">— No MVP (open poll) —</option>
+                {winningPlayers.map(p => (
+                  <option key={p.user_id} value={p.user_id}>{p.display_name ?? p.user_id}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {error && <div className="error">{error}</div>}
 

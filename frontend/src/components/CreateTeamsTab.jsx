@@ -103,6 +103,9 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
   )
   const [mustTogether, setMustTogether] = useState([])
   const [mustSeparate, setMustSeparate] = useState([])
+  const [tempPlayers, setTempPlayers] = useState([])
+  const [tempName, setTempName] = useState('')
+  const [tempScore, setTempScore] = useState(9)
   const [tp1, setTp1] = useState(''); const [tp2, setTp2] = useState('')
   const [sp1, setSp1] = useState(''); const [sp2, setSp2] = useState('')
   const [togetherErr, setTogetherErr] = useState('')
@@ -126,7 +129,8 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
 
   const needed = numPerTeam * 2
   const atLimit = selected.size >= needed
-  const canGenerate = selected.size === needed
+  const totalSelected = selected.size + tempPlayers.length
+  const canGenerate = totalSelected === needed
   const selectedPlayers = players.filter(p => selected.has(p.user_id))
   const nameFor = id => {
     const p = players.find(p => p.user_id === id)
@@ -149,6 +153,13 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
     setErr(''); setList(prev => [...prev, [p1, p2]]); return true
   }
 
+  const addTempPlayer = () => {
+    const name = tempName.trim()
+    if (!name) return
+    setTempPlayers(prev => [...prev, { name, score: Number(tempScore) }])
+    setTempName(''); setTempScore(9)
+  }
+
   const generate = async () => {
     setLoading(true); setError(null); setSolutions(null); setChosenIndex(null); setChooseError(null)
     try {
@@ -159,6 +170,7 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
           selected_player_ids: [...selected],
           must_together: mustTogether,
           must_separate: mustSeparate,
+          temp_players: tempPlayers,
         }),
       })
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Server error') }
@@ -211,7 +223,7 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
       </div>
 
       <div className="counter">
-        <span className={canGenerate ? 'count good' : 'count'}>{selected.size} / {needed} selected</span>
+        <span className={canGenerate ? 'count good' : 'count'}>{totalSelected} / {needed} selected</span>
         <span className="hint"> — {numPerTeam} per team</span>
       </div>
 
@@ -234,6 +246,30 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
               )
             })
         }
+      </div>
+
+      <div className="constraint-section">
+        <h3>Temporary players</h3>
+        <div className="constraint-row">
+          <input type="text" placeholder="Name" value={tempName}
+            onChange={e => setTempName(e.target.value)} />
+          <input type="number" min={3} max={15} step={0.1} value={tempScore}
+            onChange={e => setTempScore(e.target.value)} style={{ width: 70 }} />
+          <button className="add-btn" onClick={addTempPlayer}>Add</button>
+        </div>
+        <div className="constraint-error" style={{ opacity: 0.65 }}>
+          Score 3–15, same scale as listed players. Not saved — used only to balance.
+        </div>
+        {tempPlayers.length > 0 && (
+          <div className="tags">
+            {tempPlayers.map((tp, i) => (
+              <span key={i} className="tag">
+                {tp.name} ({tp.score})
+                <button onClick={() => setTempPlayers(prev => prev.filter((_, j) => j !== i))} aria-label="Remove">×</button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <ConstraintSection
@@ -269,7 +305,7 @@ export default function CreateTeamsTab({ tournamentId, apiFetch, preselectedIds,
       <button className="generate-btn" onClick={generate} disabled={!canGenerate || loading}>
         {loading
           ? <span className="loading-text"><span className="spinner" />Generating…</span>
-          : `Generate Teams${canGenerate ? '' : ` (${needed - selected.size} more needed)`}`}
+          : `Generate Teams${canGenerate ? '' : ` (${needed - totalSelected} more needed)`}`}
       </button>
 
       {solutions && (
